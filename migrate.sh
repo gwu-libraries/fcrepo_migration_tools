@@ -12,7 +12,8 @@ sub_export() {
      --dir /data/fedora-4.7.5-export \
      --user fedoraAdmin:fedoraAdmin \
      --mode export \
-     --resource http://127.0.0.1:8984/rest \
+     --resource http://127.0.0.1:8984/rest/prod \
+
      --binaries \
      --versions > /data/export_4_`date +%Y%m%dT%H%M%S`.log 2>&1
 }
