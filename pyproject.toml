@@ -1,0 +1,13 @@
+[project]
+name = "fcrepo_graph"
+version = "0.1.0"
+dependencies = [
+    "click>=8.3.0",
+    "pyoxigraph>=0.5.1",
+    "requests>=2.32.5",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.0.1",
+]
