@@ -2,7 +2,7 @@
 # To run the migration process, run this image once per stage. The /data bound volume should be the directory where you want the migrated data to reside.
 # 0. Ensure that the existing Fedora4 container is running and has the 8984 port open to the host network.
 # 1. Build the image: docker buildx build -t fcrepo-migration-tools .
-# 2. Perform the export: docker run --rm -v /data:/data fcrepo-migration-tools ./migrate.sh export
+# 2. Perform the export: docker run --rm --network="host" -v /data:/data fcrepo-migration-tools ./migrate.sh export
 # 3. Execute the first migration stage: docker run --rm -v /data:/data fcrepo-migration-tools ./migrate.sh to5
 # 4. Execute the second migration stage: docker run --rm -v /data:/data fcrepo-migration-tools ./migrate.sh to6
 # 5. Logs from each stage can be found in the /data directory.
