@@ -1,0 +1,52 @@
+name: fcrepo
+services:
+  fedora:
+    container_name: fedora
+    hostname: fedora
+    build:
+      dockerfile: Dockerfile
+      context: .
+    #image: fcrepo/fcrepo:6.5.1-tomcat9
+    restart: unless-stopped
+    depends_on:
+      - pg-fcrepo
+    environment:
+      - >-
+        CATALINA_OPTS=-Dfcrepo.home=/fcrepo-home -Djava.awt.headless=true -Dfile.encoding=UTF-8
+        -server -Xms1G -Xmx2G -XX:NewSize=256m -XX:MaxNewSize=1G
+        -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/data/mem
+        -Dorg.apache.tomcat.util.buf.UDecoder.ALLOW_ENCODED_SLASH=true
+        -Dfcrepo.pid.minter.length=2 -Dfcrepo.pid.minter.count=4
+        -Dfcrepo.jms.enabled=false -Dfcrepo.metrics.enable=true
+        -Dfcrepo.log=DEBUG
+        -Dfcrepo.db.url=$FEDORA_PG_URL -Dfcrepo.db.user=$FEDORA_PG_USER -Dfcrepo.db.password=$FEDORA_PG_PASSWORD
+      - JAVA_OPTS=-Dorg.apache.tomcat.util.buf.UDecoder.ALLOW_ENCODED_SLASH=true -Dfcrepo.pid.minter.length=2 -Dfcrepo.pid.minter.count=4
+    volumes:
+      - /data/fedora6:/fcrepo-home
+    ports:
+      - 8080:8080
+    networks:
+      - ss-dev
+  pg-fcrepo:
+    image: postgres:15-alpine
+    container_name: postgres
+    hostname: pg-fcrepo
+    environment:
+      POSTGRES_USER: $FEDORA_PG_USER
+      POSTGRES_PASSWORD: $FEDORA_PG_PASSWORD
+      POSTGRES_DB: $FEDORA_DB
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - dev-pg-db:/var/lib/postgresql/data
+    networks:
+      - ss-dev
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+volumes:
+  dev-pg-db:
+networks:
+  ss-dev:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-ss-dev
