@@ -52,7 +52,7 @@ def remove_audits(ttl):
     # Derive prefixes from original TTL file
     with open(ttl) as f:
         rdf = f.read()
-    prefixes = [r for r in rdf.text.split("\n") if r.startswith("@prefix")]
+    prefixes = [r for r in rdf.split("\n") if r.startswith("@prefix")]
     prefix_dict = {}
     for prefix in prefixes:
         p = prefix.split()
