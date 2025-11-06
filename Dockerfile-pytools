@@ -1,9 +1,9 @@
 FROM ghcr.io/astral-sh/uv:python3.14-alpine
 
-ADD fcrepo_tools.py pyproject.toml uv.lock /opt/app/
+ADD fcrepo_tools.py pyproject.toml /opt/app/
 
 WORKDIR /opt/app
 
-RUN uv sync --locked --no-dev
+RUN uv lock
 
-ENTRYPOINT ["uv", "run", "fcrepo_tools.py"]
+ENTRYPOINT ["uv", "run", "--no-dev", "fcrepo_tools.py"]
