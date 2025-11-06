@@ -4,6 +4,6 @@ ADD fcrepo_tools.py pyproject.toml uv.lock /opt/app/
 
 WORKDIR /opt/app
 
-RUN uv lock && uv sync --locked
+RUN uv lock && uv sync --locked --no-dev
 
 ENTRYPOINT ["uv", "run", "fcrepo_tools.py"]
