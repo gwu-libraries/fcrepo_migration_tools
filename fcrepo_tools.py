@@ -4,7 +4,7 @@ import click
 import logging
 from pathlib import Path
 from typing import List
-from pyoxigraph import Store
+from pyoxigraph import Store, parse, serialize, NamedNode
 
 logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
@@ -43,6 +43,23 @@ def delete_object(session, uri):
 @click.group()
 def main():
     pass
+
+
+@main.command()
+@main.option("--ttl", help="Path to TTL file to modify.")
+def remove_audits(ttl):
+    g = parse(path=ttl)
+    # Remove every child except the prod object
+    keep = [
+        node
+        for node in g
+        if not (
+            node.predicate == NamedNode("http://www.w3.org/ns/ldp#contains")
+            and node.object != NamedNode("http://localhost:8984/rest/prod")
+        )
+    ]
+    # Save modified graph
+    serialize(input=keep, output=ttl)
 
 
 @main.command()
