@@ -56,7 +56,7 @@ def remove_audits(ttl):
     prefix_dict = {}
     for prefix in prefixes:
         p = prefix.split()
-        prefix_dict[p[1]] = p[2][1:-1]
+        prefix_dict[p[1][:-1]] = p[2][1:-1]
     # Remove every child except the prod object
     keep = [
         node
