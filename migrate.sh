@@ -28,7 +28,7 @@ sub_to5() {
 sub_to6() {
     echo "Migrating objects to Fedora 6/OCFL."
     mkdir -p /data/fedora6
-    java --add-opens java.base/java.util.concurrent=ALL-UNNAMED -jar fcrepo-upgrade-utils-6.3.0-AVALON.jar --input-dir  /data/fedora5 --output-dir /data/fedora6  --source-version 5+ --target-version 6+ --base-uri http://localhost:8984/rest > /data/upgrade_6_`date +%Y%m%dT%H%M%S`.log 2>&1
+    java --add-opens java.base/java.util.concurrent=ALL-UNNAMED -jar fcrepo-upgrade-utils-6.3.0-AVALON.jar --input-dir  /data/fedora5 --output-dir /data/fedora6  --source-version 5+ --target-version 6+ --base-uri http://localhost:8984/rest/prod > /data/upgrade_6_`date +%Y%m%dT%H%M%S`.log 2>&1
 }
 subcommand=$1
 case $subcommand in
