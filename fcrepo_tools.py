@@ -49,6 +49,14 @@ def main():
 @click.option("--ttl", help="Path to TTL file to modify.")
 def remove_audits(ttl):
     g = parse(path=ttl)
+    # Derive prefixes from original TTL file
+    with open(ttl) as f:
+        rdf = f.read()
+    prefixes = [r for r in rdf.text.split("\n") if r.startswith("@prefix")]
+    prefix_dict = {}
+    for prefix in prefixes:
+        p = prefix.split()
+        prefix_dict[p[1]] = p[2][1:-1]
     # Remove every child except the prod object
     keep = [
         node
@@ -59,7 +67,7 @@ def remove_audits(ttl):
         )
     ]
     # Save modified graph
-    serialize(input=keep, output=ttl, format=RdfFormat.TURTLE)
+    serialize(input=keep, output=ttl, format=RdfFormat.TURTLE, prefixes=prefix_dict)
 
 
 @main.command()
