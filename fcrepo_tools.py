@@ -46,7 +46,7 @@ def main():
 
 
 @main.command()
-@main.option("--ttl", help="Path to TTL file to modify.")
+@click.option("--ttl", help="Path to TTL file to modify.")
 def remove_audits(ttl):
     g = parse(path=ttl)
     # Remove every child except the prod object
