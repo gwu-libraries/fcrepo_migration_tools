@@ -4,7 +4,7 @@ import click
 import logging
 from pathlib import Path
 from typing import List
-from pyoxigraph import Store, parse, serialize, NamedNode
+from pyoxigraph import Store, parse, serialize, NamedNode, RdfFormat
 
 logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
@@ -59,7 +59,7 @@ def remove_audits(ttl):
         )
     ]
     # Save modified graph
-    serialize(input=keep, output=ttl)
+    serialize(input=keep, output=ttl, format=RdfFormat.TURTLE)
 
 
 @main.command()
