@@ -82,7 +82,7 @@ def parse_graph(root: str, output: str):
 @main.command()
 @click.option(
     "--objects",
-    help="Path to CSV containing list of objects to remove, one URI per line.",
+    help="Path to text file containing list of objects to remove, one URI per line.",
 )
 def remove_orphans(objects):
     with open(objects) as f:
@@ -90,6 +90,8 @@ def remove_orphans(objects):
     session = requests.Session()
     for uri in uris:
         if uri:
+            # Replace the localhost with the base URI of the host network
+            uri = uri.replace("localhost", "127.0.0.1")
             logging.info(f"Deleting object {uri}")
             delete_object(session, uri)
 
