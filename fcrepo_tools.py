@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import List
 from pyoxigraph import Store, parse, serialize, NamedNode, RdfFormat
+import subprocess
 
 logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
@@ -43,6 +44,35 @@ def delete_object(session, uri):
 @click.group()
 def main():
     pass
+
+
+@main.command()
+@click.option(
+    "--remote-path", help="Path to OCFL root directory on the remove, to sync FROM."
+)
+@click.option(
+    "--local-path", default="./", help="Path on the local machine, to sync TO "
+)
+@click.option("--rsync", default="rsync", help="Local path to rsync command.")
+def rsync_ocfl(remote_path, local_path, rsync):
+    # -rvzWP -f'+ *.nt' -f'+ */'   -f'- *'   --dry-run  aws-gwss-migrate:/data/ocfl-root ./data
+    # filter for all .nt files, all directories, exclude all binaries
+    command = [
+        rsync,
+        "-rvzWP",
+        "-f",
+        "+ *.nt",
+        "-f",
+        "+ */",
+        "-f",
+        "- *",
+        #        "--dry-run",
+        remote_path,
+        local_path,
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True)
+    if completed.returncode == 0:
+        print("Rsync completed successfully.")
 
 
 @main.command()
