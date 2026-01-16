@@ -2,14 +2,161 @@ import csv
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from csv import DictReader
+from dataclasses import dataclass, field, make_dataclass
 from datetime import datetime
 from itertools import groupby
 from pathlib import Path
 from shutil import copy2
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
-from pyoxigraph import Store
+from more_itertools import before_and_after
+from pyoxigraph import Literal, Store
+
+
+def make_model_class_instance(
+    id: str,
+    triples: Iterator,
+    mapping: Dict[str, Tuple[str, bool]],
+    model_class,
+):
+    """
+    Helper method for creating instances of dataclasses from Fedora object models
+    """
+    kwargs = defaultdict(list)
+    for triple in triples:
+        if triple["p"].value in mapping:
+            # Get Bulkrax field from RDF predicate
+            (field_name, multiple) = mapping[triple["p"].value]
+            # Array fields
+            if multiple:
+                kwargs[field_name].append(triple["o"].value)
+            # Single-value fields
+            else:
+                kwargs[field_name] = triple["o"].value
+    # Expect the AdminSet name to be the final element in each "triple"
+    # We don't need to include it in the import CSV, but it needs to be set at time of import
+    admin_set = triple["adminSet"].value if triple["adminSet"] else None
+    return model_class(id=id, admin_set=admin_set, **kwargs)
+
+
+@dataclass
+class FileSet:
+    """
+    Dataclass for FileSet metadata. No mapping here -- predicates are captured and mapped during the Sparql query
+    """
+
+    parents: str  # Parent = work ID
+    id: str
+    file: str  # File name
+    title: str
+    file_uri: str  # URI to binary resource
+
+    @staticmethod
+    def make_fileset(triple):
+        parents, id, file, file_uri = (
+            triple["work"].value,
+            triple["fileset"].value,
+            triple["filename"].value,
+            triple["file_uri"].value,
+        )
+        return FileSet(parents=parents, id=id, file=file, title=file, file_uri=file_uri)
+
+    def get_file_path(self, path_to_root: str) -> Optional[Path]:
+        """Construct the path to each (binary) file for copying."""
+        file_path = urlparse(self.file_uri).path
+        # Not necessary to use the version information to access the latest version of the binar
+        # version_path = urlparse(file_set["version"])
+        file_path = Path(path_to_root) / f"{file_path}.binary"
+        if file_path.exists():
+            return file_path
+
+    def format_row(self, formatter):
+        return {k: formatter(v) for k, v in self.__dict__.items() if k != "file_uri"}
+
+
+class PermissionsMapping:
+    """
+    Expect each resource to have an array of permission groups.
+    """
+
+    def __init__(self):
+        self.permissions_per_resource = {}
+
+    def make_mapping(self, results: Iterator[Tuple[str, str]]):
+        # Since a resource can have multiple permissions, store them as a list
+        # Group by resource ID
+        #  (r["agent"].value, r["resource"].value
+        for k, g in groupby(results, key=lambda r: r["resource"].value):
+            self.permissions_per_resource[k] = []
+            for row in g:
+                self.permissions_per_resource[k].append(row["agent"].value)
+        return self
+
+    def update_resource(self, resource):
+        permission = self.permissions_per_resource.get(resource.id)
+        if permission:
+            visibility = "private"
+            for group_uri in permission:
+                group_id = uri_to_id(group_uri).split("#")[-1]
+                match group_id:
+                    case "public":
+                        visibility = "open"
+                        break
+                    case "registered":
+                        visibility = "restricted"
+            resource.visibility = visibility
+        return resource
+
+
+class EmbargoMapping:
+    """
+    Expect each resource to have at most one embargo.
+    """
+
+    def __init__(self):
+        self.embargo_per_resource = {}
+
+    def make_mapping(self, results: Iterator):
+        for r in results:
+            self.embargo_per_resource[r["resource"].value] = {
+                "visibility_during_embargo": r["visibilityDuringEmbargo"].value,
+                "visibility_after_embargo": r["visibilityAfterEmbargo"].value,
+                "release_date": r["releaseDate"].value,
+                "visibility": "embargo",
+            }
+        return self
+
+    def update_resource(self, resource):
+        embargo = self.embargo_per_resource.get(resource.id)
+        if embargo:
+            if is_active_embargo(embargo):
+                for field, value in embargo.items():
+                    setattr(resource, field, value)
+            # If the embargo release date is in the past, update the visibility per the embargo instructions
+            else:
+                resource.visibility = embargo["visibility_after_embargo"]
+        return resource
+
+
+class ParentChildMapping:
+    """
+    Maps child works to parents. Assumes a single work can have multiple parents.
+    """
+
+    def __init__(self):
+        self.parent_child_mapping = defaultdict(list)
+
+    def make_mapping(self, results: Iterator):
+        for row in results:
+            self.parent_child_mapping[row["resource"].value].append(row["parent"].value)
+        return self
+
+    def update_resource(self, resource):
+        parents = self.parent_child_mapping.get(resource.id)
+        if parents:
+            resource.parents = parents
+        return resource
 
 
 def batched(data: Iterable[tuple[Any, Any]], size: int) -> Iterator[Dict[Any, Any]]:
@@ -43,16 +190,17 @@ def is_active_embargo(record):
 
 class FedoraGraph:
     MEMBERSHIP_CHILD = "http://pcdm.org/models#memberOf"
-    MEMBERSHIP_PARENT = "http://pcdm.org/models#hasMember"
+    # MEMBERSHIP_PARENT = "http://pcdm.org/models#hasMember"
 
     def __init__(
         self,
         path_to_graph,
         path_to_root,
-        path_to_mapping,
-        output_path: str,
-        models,
-        pipe_delimited: List[str] | str,
+        output_path,
+        path_to_mapping: str,
+        models: List[str] | str,
+        admin_set: Optional[str] = None,
+        pipe_delimited: Optional[List[str]] = None,
         batch_size: int = 50,
     ):
         """Provide a path to an Oxigraph RDF store, a path to a mapping of RDF predicates to Bulkrax fields, and a list satisfying the predicate info:fedora/fedora-system:def/model#hasModel for the types of works to be extracted.
@@ -61,81 +209,160 @@ class FedoraGraph:
         self.store = Store.read_only(str(path_to_graph))
         self.path_to_root = path_to_root
         self.output_path = output_path
-        with open(path_to_mapping) as f:
-            reader = DictReader(f)
-            mapping = [r for r in reader]
-        self.mapping = {row["predicate"]: row["bulkrax_field"] for row in mapping}
+        self.mapping = FedoraGraph.load_mapping(path_to_mapping)
+        # Add the predicate the connects child works to parents
+        if FedoraGraph.MEMBERSHIP_CHILD not in self.mapping:
+            self.mapping[FedoraGraph.MEMBERSHIP_CHILD] = ("parents", True)
+        # FedoraGraph owns the Work and Collections classes because we dynamically generate them based on the supplied fields in the mapping
+        self.Work = FedoraGraph.create_resource_class("Work", self.mapping)
+        self.Collection = FedoraGraph.create_resource_class("Collection", self.mapping)
         if isinstance(models, str):
             self.models = models.split(",")
         else:
             self.models = models
-        self.pipe_delimited = pipe_delimited
+        self.admin_set = admin_set
+        self.pipe_delimited = pipe_delimited if pipe_delimited else []
         self.batch_size = batch_size
         # Fedora graph data, URI's mapped to predicates
-        # Load all data on initialization
-        self.collections = self.get_resources()
-        self.works = self.get_resources(self.models)
-        self.file_sets = self.get_file_sets()
-        self.permissions = self.get_group_permissions()
+        # Load permissions and embargo data on initialization
+        self.permissions = self.get_permissions()
         self.embargos = self.get_embargos()
-        self.parents = self.map_parents_children()
+        self.parents = self.get_parents()
 
-    def get_resources(
-        self, models: Optional[List[str]] = None
-    ) -> Dict[str, List[Tuple[str, str]]]:
-        """Returns a map of resouurce ID's to their predicates."""
-        if models:
-            models_str = " ".join([f'"{model}"' for model in models])
-            query = """
-            prefix fedora: <info:fedora/fedora-system:def/model#>
+    @staticmethod
+    def load_mapping(path_to_mapping: str) -> Dict[str, tuple[str, bool]]:
+        with open(path_to_mapping) as f:
+            reader = DictReader(f)
+            mapping = [r for r in reader]
+        return {
+            str(row["predicate"]): (
+                str(row["bulkrax_field"]),
+                True if str(row["multiple"]).lower() == "true" else False,
+            )
+            for row in mapping
+        }
 
-            select distinct ?s ?p ?o
-            where {{
-                values ?model {{ {models} }}
-                ?s ?p ?o.
-                ?s fedora:hasModel ?model
-            }}
-            """.format(models=models_str)
-        else:
-            query = """
-            prefix fedora: <info:fedora/fedora-system:def/model#>
+    @staticmethod
+    def create_resource_class(class_name: str, mapping: Dict[str, tuple[str, bool]]):
+        """
+        Returns a dynamically generated dataclass with the Bulkrax fields from the mapping provided
+        """
 
-            select ?s ?p ?o
-            where {
-                ?s fedora:hasModel "Collection".
-                ?s ?p ?o
-
-            }
+        def make_resource(id: str, triples: List[Tuple[str, str, str]]):
             """
-        results = sorted(
-            [
-                (r["s"].value, r["p"].value, r["o"].value)
-                for r in self.store.query(query)
-            ],
-            key=lambda x: x[0],
+            Makes an instance of a Work dataclass from the provided triples. This object corresponds to a Hyrax work.
+            """
+            return make_model_class_instance(
+                id=id, triples=triples, mapping=mapping, model_class=resource_class
+            )
+
+        class_args = [("id", str), ("admin_set", str)]
+        for f in mapping.values():
+            if f[1]:
+                class_args.append((f[0], list[str], field(default_factory=list)))
+            else:
+                class_args.append((f[0], str, field(default="")))
+        resource_class = make_dataclass(
+            class_name,
+            fields=class_args,
+            namespace={
+                "format_row": lambda self, formatter: {
+                    k: formatter(v)
+                    for k, v in self.__dict__.items()
+                    if k != "admin_set"
+                }
+            },
         )
-        return {k: list(g) for k, g in groupby(results, key=lambda x: x[0])}
+        resource_class.make_resource = staticmethod(make_resource)
+        return resource_class
 
-    def select_latest_version(
-        self, file_sets: List[Dict[str, str]]
-    ) -> Iterator[Dict[str, str | datetime]]:
-        """If necessary, select the latest version of each file, based on the Fedora modification date."""
-        for _, group in groupby(
-            sorted(file_sets, key=lambda x: x["file_uri"]), key=lambda x: x["file_uri"]
-        ):
-            # calculate latest version
-            latest_version = {}
-            for version in group:
-                version["last_modified"] = datetime.fromisoformat(
-                    version["last_modified"]
+    def get_resources(self, model) -> Iterator:
+        """
+        Returns all works, optionally limited to a given Hyrax AdminSet
+        """
+        admin_set_values = ""
+        admin_set_criteria = ""
+        if model == self.Collection:
+            models_str = '"Collection"'
+        else:
+            models_str = " ".join([f'"{model}"' for model in self.models])
+            if self.admin_set:
+                admin_set_values = "values ?adminSet {{ {admin_set} }}".format(
+                    admin_set=self.admin_set
                 )
-                if not latest_version or (
-                    latest_version["last_modified"] < version["last_modified"]
-                ):
-                    latest_version = version
-            yield latest_version
+            admin_set_criteria = """?s partOf: ?a.
+            ?a fedora:hasModel ?adminSetModel.
+            ?a title: ?adminSet"""
 
-    def map_parents_children(self) -> Dict[str, str]:
+        query = """
+            prefix fedora: <info:fedora/fedora-system:def/model#>
+            prefix pcdm: <http://pcdm.org/models#>
+            prefix partOf: <http://purl.org/dc/terms/isPartOf>
+            prefix title: <http://purl.org/dc/terms/title>
+
+            select distinct ?s ?p ?o ?adminSet
+            where {{
+               values ?model {{ {models} }}
+               values ?adminSetModel {{ "AdminSet" }}
+               {admin_set_values}
+               ?s ?p ?o.
+               ?s fedora:hasModel ?model.
+               {admin_set_criteria}
+            }}
+            order by ?s
+        """.format(
+            models=models_str,
+            admin_set_values=admin_set_values,
+            admin_set_criteria=admin_set_criteria,
+        )
+
+        # Return results grouped by ID
+        for k, g in groupby(self.store.query(query), key=lambda r: r["s"].value):
+            yield model.make_resource(id=k, triples=g)
+
+    def get_filesets(self) -> Iterator[Tuple[str, FileSet]]:
+        """Returns all filesets with references to parent works and file URI's."""
+        if self.admin_set:
+            admin_set_values = """
+          values ?adminSetModel {{ "AdminSet" }}
+          values ?adminSet {{ {admin_set} }}
+          """.format(admin_set=self.admin_set)
+            admin_set_criteria = """
+          ?s partOf: ?a.
+          ?a fedora:hasModel ?adminSetModel.
+          ?a title: ?adminSet
+          """
+        else:
+            admin_set_values, admin_set_criteria = "", ""
+        fileset_query = """
+          prefix fedora: <info:fedora/fedora-system:def/model#>
+          PREFIX fedora_repo: <http://fedora.info/definitions/v4/repository#>
+          prefix ns: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+          prefix pcdm: <http://pcdm.org/models#>
+
+          select distinct (?s as ?work) (?fs as ?fileset) (?fn as ?filename) (?fu as ?file_uri)
+          where {{
+                {admin_set_values}
+                ?s pcdm:hasMember ?fs.
+                ?fs ns:type ?fm.
+                ?fs fedora:downloadFilename ?fn.
+                ?fs pcdm:hasFile ?fu.
+                ?fu ns:type <http://pcdm.org/use#OriginalFile>.
+                {admin_set_criteria}
+                filter(str(?fm) = "http://projecthydra.org/works/models#FileSet")
+            }}
+            order by ?s
+      """.format(
+            admin_set_values=admin_set_values, admin_set_criteria=admin_set_criteria
+        )
+        # group by parent work ID for batching
+        for k, g in groupby(
+            self.store.query(fileset_query), key=lambda r: r["work"].value
+        ):
+            for triple in g:
+                yield FileSet.make_fileset(triple)
+
+    def get_parents(self) -> ParentChildMapping:
         """Matches parent works to their children."""
         children_query = """
             prefix pcdm: <http://pcdm.org/models#>
@@ -150,55 +377,11 @@ class FedoraGraph:
 
             }
         """
-        child_to_parents = defaultdict(list)
-        for row in self.store.query(children_query):
-            child_to_parents[row["resource"].value].append(row["parent"].value)
-        return child_to_parents
+        return ParentChildMapping().make_mapping(self.store.query(children_query))
 
-    def get_file_sets(self) -> Dict[str, List[Dict[str, str | datetime]]]:
-        """Returns all filesets with references to parent works and file URI's. Selects the most recent version (by Fedora modification date) when multiple versions of a file exist."""
-        fileset_query = """
-            prefix fedora: <info:fedora/fedora-system:def/model#>
-            PREFIX fedora_repo: <http://fedora.info/definitions/v4/repository#>
-            prefix ns: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-            prefix pcdm: <http://pcdm.org/models#>
-
-            select distinct (?s as ?work) (?fs as ?fileset) (?fn as ?filename) (?fu as ?file_uri) # ?version ?modified
-            where {
-                ?s pcdm:hasMember ?fs.
-                ?fs ns:type ?fm.
-                ?fs fedora:downloadFilename ?fn.
-                ?fs pcdm:hasFile ?fu.
-                ?fu ns:type <http://pcdm.org/use#OriginalFile>.
-                # ?fu fedora_repo:hasVersion ?version.
-                # ?version fedora_repo:lastModified ?modified
-                filter(str(?fm) = "http://projecthydra.org/works/models#FileSet")
-            }
-        """
-        file_sets = [
-            {
-                "parents": r["work"].value,
-                "id": r["fileset"].value,
-                "file": r["filename"].value,  # Bulkrax CSV fields
-                "title": r["filename"].value,  # Bulkrax CSV fields
-                "file_uri": r["file_uri"].value,
-                #      "version": r["version"].value,
-                #      "last_modified": r["modified"].value,
-            }
-            for r in self.store.query(fileset_query)
-        ]
-        # group by parent work ID for batching
-        return {
-            k: list(g)
-            for k, g in groupby(
-                sorted(file_sets, key=lambda x: x["parents"]),
-                key=lambda x: x["parents"],
-            )
-        }
-
-    def get_group_permissions(self) -> Dict[str, List[str]]:
-        """Returns group-level permissions mapped to the resource ID's they control."""
-        query_agents = """
+    def get_permissions(self) -> PermissionsMapping:
+        """Creates mapping of group-level permissions mapped to the resource ID's they control."""
+        query = """
             prefix fedoraModel: <info:fedora/fedora-system:def/model#>
             prefix acl: <http://www.w3.org/ns/auth/acl#>
 
@@ -212,143 +395,48 @@ class FedoraGraph:
                 filter(str(?model) = "Hydra::AccessControls::Permission")
                 filter(contains(str(?agent), "group"))
             }
+            order by ?resource
             """
-        results = [
-            (r["agent"].value, r["resource"].value)
-            for r in self.store.query(query_agents)
-        ]
-        results = sorted(results, key=lambda x: x[1])
-        permissions_per_resource = {}
-        # Since a resource can have multiple permissions, return them as a list
-        for k, g in groupby(results, key=lambda x: x[1]):
-            permissions_per_resource[k] = []
-            for row in g:
-                permissions_per_resource[k].append(row[0])
-        return permissions_per_resource
 
-    def get_embargos(self) -> Dict[str, Dict[str, str]]:
+        return PermissionsMapping().make_mapping(self.store.query(query))
+
+    def get_embargos(self) -> EmbargoMapping:
         "Extracts embargo details, mapping to embargoed resource ID's."
-        query_embargos = """
-        prefix fedora_model: <info:fedora/fedora-system:def/model#>
-        prefix hydra_acl: <http://projecthydra.org/ns/auth/acl#>
-        prefix pcdm_model: <http://pcdm.org/models#>
+        query = """
+            prefix fedora_model: <info:fedora/fedora-system:def/model#>
+            prefix hydra_acl: <http://projecthydra.org/ns/auth/acl#>
+            prefix pcdm_model: <http://pcdm.org/models#>
 
-        select distinct ?resource ?visibilityDuringEmbargo ?visibilityAfterEmbargo ?releaseDate
-        where {
-            ?s fedora_model:hasModel ?model.
-            ?s hydra_acl:embargoReleaseDate ?releaseDate.
-            ?s hydra_acl:visibilityDuringEmbargo ?visibilityDuringEmbargo.
-            ?s hydra_acl:visibilityAfterEmbargo ?visibilityAfterEmbargo.
-            ?resource hydra_acl:hasEmbargo ?s.
-            filter(str(?model) = "Hydra::AccessControls::Embargo")
-        }
-        """
-        results = {
-            r["resource"].value: {
-                "visibility_during_embargo": r["visibilityDuringEmbargo"].value,
-                "visibility_after_embargo": r["visibilityAfterEmbargo"].value,
-                "release_date": r["releaseDate"].value,
-                "visibility": "embargo",
+            select distinct ?resource ?visibilityDuringEmbargo ?visibilityAfterEmbargo ?releaseDate
+            where {
+                ?s fedora_model:hasModel ?model.
+                ?s hydra_acl:embargoReleaseDate ?releaseDate.
+                ?s hydra_acl:visibilityDuringEmbargo ?visibilityDuringEmbargo.
+                ?s hydra_acl:visibilityAfterEmbargo ?visibilityAfterEmbargo.
+                ?resource hydra_acl:hasEmbargo ?s.
+                filter(str(?model) = "Hydra::AccessControls::Embargo")
             }
-            for r in self.store.query(query_embargos)
-        }
-        return results
+        """
+        return EmbargoMapping().make_mapping(self.store.query(query))
 
-    # TO DO: extract parent-child relationship for nested works
-    def convert_resources(
-        self, data: Dict[str, Dict[str, str]]
-    ) -> Iterator[Dict[str, List[str]]]:
-        """Converts each resources's set of triples into a dictionary mapping Bulkrax fields to values"""
-        for _id, triples in data.items():
-            row = {"id": _id}
-            for _, predicate, value in triples:
-                # Add a value to the parents columnn for any resources that belong to a collection
-                if predicate == FedoraGraph.MEMBERSHIP_CHILD:
-                    row["parents"] = row.get("parents", []) + [value]
-                    continue
-                bulkrax_field = self.mapping.get(predicate)
-                if bulkrax_field:
-                    row[bulkrax_field] = row.get(bulkrax_field, []) + [value]
-            # Find any parent works (which are identified on the parent resource, not the child)
-            parents = self.parents.get(_id)
-            if parents:
-                row["parents"] = row.get("parents", []) + parents
-            yield row
+    def format_for_bulkrax(self, key: str, value: str | List[str]) -> Optional[str]:
+        """Formats each value for Bulkrax, extracting resource identifiers from URI's, and combining duplicate fields using either a semicolon or a pipe."""
+        if key in ("id", "parents"):
+            return uri_to_id(value)
+        elif (key in self.pipe_delimited) and isinstance(value, list):
+            return "|".join(value)
+        elif isinstance(value, list):
+            return "; ".join(value)
 
-    def format_row(
-        self, row: Dict[str, List[str]], is_fileset=False
-    ) -> Dict[str, str | List[str]]:
-        """Formats each row for Bulkrax, extracting resource identifiers from URI's, and combining duplicate fields using either a semicolon or a pipe."""
-        for field, value in row.items():
-            if field in ["id", "parents"]:
-                row[field] = uri_to_id(row[field])
-            if field in self.pipe_delimited:
-                row[field] = "|".join(value)
-            elif isinstance(row[field], list):
-                row[field] = "; ".join(value)
-        # Use the resource ID for the Bulkrax identifier if not already present
-        row["bulkrax_identifier"] = row.get("bulrax_identifier", row["id"])
-        if is_fileset:
-            # We don't want to provide ID's for FileSets
-            # We don't need these metadata elements for fileset import
-            for key in ["id", "version", "file_uri", "last_modified"]:
-                if key in row:
-                    del row[key]
-        return row
-
-    def match_permissions(
-        self, rows: Iterable[Dict[str, str | List[str]]]
-    ) -> Iterator[Dict[str, List[str]]]:
-        """Match permissions to their associated resources, selecting for the highest level of visibility."""
-        for resource in rows:
-            permission = self.permissions.get(resource["id"])
-            if permission:
-                visibility = "private"
-                for group_uri in permission:
-                    group_id = uri_to_id(group_uri).split("#")[-1]
-                    match group_id:
-                        case "public":
-                            visibility = "open"
-                            break
-                        case "registered":
-                            visibility = "restricted"
-                resource["visibility"] = visibility
-            yield resource
-
-    def match_embargos(
-        self, rows: Iterable[Dict[str, str | List[str]]]
-    ) -> Iterator[Dict[str, List[str]]]:
-        """Match embargos to their associated resources, filtering for unexpired embargos."""
-        for resource in rows:
-            embargo = self.embargos.get(resource["id"])
-            if embargo:
-                if is_active_embargo(embargo):
-                    resource.update(embargo)
-                # If the embargo release date is in the past, update the visibility per the embargo instructions
-                else:
-                    resource["visibility"] = embargo["visibility_after_embargo"]
-            yield resource
-
-    def get_file_path(self, file_set: Dict[str, str]) -> Optional[Path]:
-        """Construct the path to each (binary) file for copying."""
-        file_path = urlparse(file_set["file_uri"]).path
-        # Not necessary to use the version information to access the latest version of the binar
-        # version_path = urlparse(file_set["version"])
-        file_path = Path(self.path_to_root) / f"{file_path}.binary"
-        if file_path.exists():
-            return file_path
-
-    def copy_files(
-        self, path_to_destination: str, files: List[Tuple[str, str]]
-    ) -> List[str]:
+    def copy_files(self, path_to_destination: Path, files: List[FileSet]) -> List[str]:
         """Copy binary files associated with filesets to the specified destination. Renames file using filename metadata."""
         output = []
-        path_to_destination = Path(path_to_destination)
-        if not path_to_destination.exists():
-            path_to_destination.mkdir()
+        pd = Path(path_to_destination)
+        if not pd.exists():
+            pd.mkdir(parents=True)
         for fs in files:
             try:
-                out = copy2(fs[0], path_to_destination / fs[1])
+                out = copy2(fs.get_file_path(self.path_to_root), pd / fs.file)
             except Exception as e:
                 continue
                 # TO DO: log error
@@ -356,7 +444,7 @@ class FedoraGraph:
         return output
 
     def copy_files_concurrently(
-        self, path_to_destination: str, file_sets: List[Tuple[str, str]]
+        self, path_to_destination: Path, file_sets: List[FileSet]
     ):
         with ThreadPoolExecutor() as exe:
             # copy files in batches of 10
@@ -376,30 +464,46 @@ class FedoraGraph:
                     continue
                     # TO DO: log file paths
 
-    def prepare_import_rows(
-        self, data: Dict[str, List[str]]
-    ) -> Iterator[Tuple[Dict[str, str], str]]:
-        """Performs mapping of resource predicates to Bulkrax fields. For filets, return the URI representing a path to the binary file object as well as the mapped and formatted Bulkrax importer row."""
-        # Add permissions and embargos to works and perform mapping from Fedora predicates to Bulkrax fields
-        for row in self.match_embargos(
-            self.match_permissions(self.convert_resources(data))
-        ):
-            # Find file sets associated with this work
-            file_sets_for_row = self.file_sets.get(row["id"], [])
-            # format fields/values for CSV
-            yield self.format_row(row), None
-            # format file sets for CSV and return binary file URI
-            for fs in self.match_embargos(self.match_permissions(file_sets_for_row)):
-                uri = fs["file_uri"]
-                yield self.format_row(fs, is_fileset=True), uri
+    def prepare_import_batches(self) -> Iterator[Tuple[int, List[Dict[str, str]]]]:
+        """Lazily emit batches of rows for compilation into a Bulkrax csv."""
 
-    def prepare_import(self):
-        for data in [self.collections, self.works]:
-            for i, batch in enumerate(batched(data.items(), self.batch_size)):
-                # Files for this batch
-                files = []
-                for row, uri in self.prepare_import_rows(batch):
-                    # Get path for copying binary
-                    if uri:
-                        # field "file" is the original filename
-                        files.append((self.get_file_path(uri), row["file"]))
+        # Using manual iterators in order to be precise about the batch size
+        coll_iter = self.get_resources(self.Collection)
+        work_iter = self.get_resources(self.Work)
+        fileset_iter = self.get_filesets()
+        batch = 0
+        done = False
+        while not done:
+            rows = []
+            files_to_copy = []
+            while len(rows) < self.batch_size:
+                # Exhaust collections first, then works
+                # This ensures collections will be imported first
+                resource = next(coll_iter, next(work_iter, None))
+                # If no more resources, we are done
+                if not resource:
+                    done = True
+                    break
+                # Add fields from relationships to ACL's, embargos, and parent works
+                resource = self.embargos.update_resource(resource)
+                resource = self.permissions.update_resource(resource)
+                resource = self.parents.update_resource(resource)
+                rows.append(resource.format_row(self.format_for_bulkrax))
+                # Filesets should be in the same order as their parent works, ordered by work ID
+                # So we take from the FileSet iterator as long as the id matches that of the current work
+                # Collections don't have FileSets, when the resource is a collection, this should be None
+                files, fileset_iter = before_and_after(
+                    lambda x: x.parents == resource.id, fileset_iter
+                )
+                for file in files:
+                    file = self.embargos.update_resource(file)
+                    file = self.permissions.update_resource(file)
+                    # Shouldn't need to add the parent to the FileSet
+                    rows.append(file.format_row(self.format_for_bulkrax))
+                    files_to_copy.append(file)
+
+            yield batch, rows
+            self.copy_files_concurrently(
+                self.output_path / f"batch_{batch}/files", files_to_copy
+            )
+            batch += 1
