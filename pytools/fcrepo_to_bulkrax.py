@@ -1,14 +1,16 @@
 import csv
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from csv import DictReader
+from csv import DictReader, DictWriter
 from dataclasses import dataclass, field, make_dataclass
 from datetime import datetime
-from itertools import groupby
+from io import StringIO
+from itertools import chain, groupby
 from pathlib import Path
 from shutil import copy2
 from typing import Any, ClassVar, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 from urllib.parse import urlparse
+from zipfile import ZipFile
 
 from more_itertools import before_and_after
 from pyoxigraph import Literal, Store
@@ -51,6 +53,7 @@ class FileSet:
     file: str  # File name
     title: str
     file_uri: str  # URI to binary resource
+    model: str = "FileSet"
 
     @staticmethod
     def make_fileset(triple):
@@ -64,15 +67,19 @@ class FileSet:
 
     def get_file_path(self, path_to_root: str) -> Optional[Path]:
         """Construct the path to each (binary) file for copying."""
-        file_path = urlparse(self.file_uri).path
+        file_path = urlparse(self.file_uri).path[1:]
         # Not necessary to use the version information to access the latest version of the binar
         # version_path = urlparse(file_set["version"])
         file_path = Path(path_to_root) / f"{file_path}.binary"
         if file_path.exists():
             return file_path
+        else:
+            pass
 
     def format_row(self, formatter):
-        return {k: formatter(v) for k, v in self.__dict__.items() if k != "file_uri"}
+        return dict(
+            [formatter(k, v) for k, v in self.__dict__.items() if k != "file_uri"]
+        )
 
 
 class PermissionsMapping:
@@ -266,11 +273,13 @@ class FedoraGraph:
             class_name,
             fields=class_args,
             namespace={
-                "format_row": lambda self, formatter: {
-                    k: formatter(v)
-                    for k, v in self.__dict__.items()
-                    if k != "admin_set"
-                }
+                "format_row": lambda self, formatter: dict(
+                    [
+                        formatter(k, v)
+                        for k, v in self.__dict__.items()
+                        if k != "admin_set"
+                    ]
+                )
             },
         )
         resource_class.make_resource = staticmethod(make_resource)
@@ -419,14 +428,20 @@ class FedoraGraph:
         """
         return EmbargoMapping().make_mapping(self.store.query(query))
 
-    def format_for_bulkrax(self, key: str, value: str | List[str]) -> Optional[str]:
+    def format_for_bulkrax(self, key: str, value: str | List[str]) -> Tuple[str, str]:
         """Formats each value for Bulkrax, extracting resource identifiers from URI's, and combining duplicate fields using either a semicolon or a pipe."""
         if key in ("id", "parents"):
-            return uri_to_id(value)
+            value = uri_to_id(value)
+            if key == "id":
+                return "bulkrax_id", value
+            else:
+                return key, value
         elif (key in self.pipe_delimited) and isinstance(value, list):
-            return "|".join(value)
+            return key, "|".join(value)
         elif isinstance(value, list):
-            return "; ".join(value)
+            return key, "; ".join(value)
+        else:
+            return key, value
 
     def copy_files(self, path_to_destination: Path, files: List[FileSet]) -> List[str]:
         """Copy binary files associated with filesets to the specified destination. Renames file using filename metadata."""
@@ -438,7 +453,7 @@ class FedoraGraph:
             try:
                 out = copy2(fs.get_file_path(self.path_to_root), pd / fs.file)
             except Exception as e:
-                continue
+                raise
                 # TO DO: log error
             output.append(out)
         return output
@@ -448,6 +463,7 @@ class FedoraGraph:
     ):
         with ThreadPoolExecutor() as exe:
             # copy files in batches of 10
+            data = []
             futures = {
                 exe.submit(
                     self.copy_files, path_to_destination, file_sets[i : i + 10]
@@ -456,30 +472,37 @@ class FedoraGraph:
             }
             for future in as_completed(futures):
                 try:
-                    data = future.result()
+                    data.extend(future.result())
                 except Exception as e:
                     continue
                     # TO DO: log error with index of batch
                 else:
                     continue
                     # TO DO: log file paths
+        return data
 
-    def prepare_import_batches(self) -> Iterator[Tuple[int, List[Dict[str, str]]]]:
+    def prepare_import_batches(
+        self,
+    ) -> Iterator[Tuple[int, List[Dict[str, str]], List[Path]]]:
         """Lazily emit batches of rows for compilation into a Bulkrax csv."""
 
         # Using manual iterators in order to be precise about the batch size
-        coll_iter = self.get_resources(self.Collection)
-        work_iter = self.get_resources(self.Work)
+        # Exhaust collections first, then works
+        # This ensures collections will be imported first
+        resource_iter = chain(
+            self.get_resources(self.Collection), self.get_resources(self.Work)
+        )
         fileset_iter = self.get_filesets()
         batch = 0
         done = False
+        collection_ids = []
+        child_works = []
+        child_work_filesets = []
         while not done:
             rows = []
             files_to_copy = []
             while len(rows) < self.batch_size:
-                # Exhaust collections first, then works
-                # This ensures collections will be imported first
-                resource = next(coll_iter, next(work_iter, None))
+                resource = next(resource_iter, None)
                 # If no more resources, we are done
                 if not resource:
                     done = True
@@ -488,22 +511,67 @@ class FedoraGraph:
                 resource = self.embargos.update_resource(resource)
                 resource = self.permissions.update_resource(resource)
                 resource = self.parents.update_resource(resource)
-                rows.append(resource.format_row(self.format_for_bulkrax))
+                # Not terribly elegant, but we don't want to emit rows for child works before their parents, or else they might be imported in the wrong order, leading to a broken relationship
+                if (
+                    hasattr(resource, "parents")
+                    and resource.parents
+                    and (resource.parents not in collection_ids)
+                ):
+                    # If it doesn't belong to a collection, then its parent would be another work
+                    child_works.append(resource)
+                else:
+                    if resource.model == "Collection":
+                        collection_ids.append(resource.id)
+                    rows.append(resource.format_row(self.format_for_bulkrax))
                 # Filesets should be in the same order as their parent works, ordered by work ID
                 # So we take from the FileSet iterator as long as the id matches that of the current work
                 # Collections don't have FileSets, when the resource is a collection, this should be None
                 files, fileset_iter = before_and_after(
-                    lambda x: x.parents == resource.id, fileset_iter
+                    lambda x: resource.id == x.parents, fileset_iter
                 )
                 for file in files:
                     file = self.embargos.update_resource(file)
                     file = self.permissions.update_resource(file)
-                    # Shouldn't need to add the parent to the FileSet
-                    rows.append(file.format_row(self.format_for_bulkrax))
-                    files_to_copy.append(file)
+                    # Is the last child work seen the parent of this fileset? If so, emit together
+                    if child_works and (child_works[-1].id == file.parents):
+                        child_work_filesets.append(file)
+                    else:
+                        rows.append(file.format_row(self.format_for_bulkrax))
+                        files_to_copy.append(file)
 
-            yield batch, rows
-            self.copy_files_concurrently(
+            new_paths = self.copy_files_concurrently(
                 self.output_path / f"batch_{batch}/files", files_to_copy
             )
+            yield batch, rows, new_paths
             batch += 1
+        # If done, emit any child works as a last batch, ensuring that their parents have already been imported
+        if child_works:
+            new_paths = self.copy_files_concurrently(
+                self.output_path / f"batch_{batch}/files", child_work_filesets
+            )
+            yield (
+                batch,
+                [
+                    r.format_row(self.format_for_bulkrax)
+                    for r in child_works + child_work_filesets
+                ],
+                new_paths,
+            )
+
+    def prepare_imports(self):
+        # Prepare and zip import CSV and files
+        for batch_id, rows, files_copied in self.prepare_import_batches():
+            path_to_batch = Path(self.output_path) / f"batch_{batch_id}"
+            output = StringIO()
+            writer = DictWriter(
+                output, fieldnames=list({[k for row in rows for k in row]})
+            )
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+            with ZipFile(path_to_batch / f"import_{batch_id}.zip", "w") as f:
+                f.mkdir("files")
+                f.writestr(f"import{batch_id}.csv", data=output.getvalue())
+                for file in files_copied:
+                    file = Path(file)
+                    f.write(file, arcname=f"files/{file.name}")

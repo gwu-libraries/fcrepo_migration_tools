@@ -1,8 +1,10 @@
-from itertools import islice
+from itertools import chain, islice
 from os import listdir
+from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from more_itertools import before_and_after
 from pyoxigraph import Literal, NamedNode
 from pytools.fcrepo_to_bulkrax import (
     EmbargoMapping,
@@ -11,6 +13,11 @@ from pytools.fcrepo_to_bulkrax import (
     ParentChildMapping,
     PermissionsMapping,
 )
+
+
+def take(n, iterable):
+    "Return first n items of the iterable as a list."
+    return list(islice(iterable, n))
 
 
 def id_to_uri(_id):
@@ -30,7 +37,7 @@ def fcrepo_export(tmp_path_factory):
     path_to_export = tmp_path_factory.mktemp("fcrepo_export")
     with ZipFile("./tests/fedora-4.7.5-export.zip") as zf:
         zf.extractall(path=path_to_export)
-    return path_to_export
+    return Path(path_to_export) / "fedora-4.7.5-export"
 
 
 @pytest.fixture(scope="session")
@@ -316,6 +323,7 @@ def graph(fcrepo_graph, fcrepo_export, output_path):
         output_path=output_path,
         models="GwWork,GwEtd,GwJournalIssue",
         pipe_delimited="license,rights_statement,doi,related_url",
+        batch_size=5,
     )
     return fg
 
@@ -439,6 +447,7 @@ def test_collection(graph, a_collection_id, a_collection_result):
     assert collection.creator == ["Author, Collection 1"]
     assert collection.date_created == ["2025"]
     assert collection.subject == ["Subject 1 Collection 1", "Subject 2 Collection 1"]
+    assert collection.model == "Collection"
 
 
 def test_load_resources(works, collections, collection_ids, work_ids):
@@ -499,3 +508,31 @@ def test_embargos(graph, works, filesets, embargos):
             ) == embargos[r_id]
         else:
             assert resource.visibility != "embargo"
+
+
+def test_ordering(works, filesets, collections):
+    work = works[0]
+    fileset = filesets[0]
+    assert work.id == fileset.parents
+
+
+def test_bulkrax_rows(graph, output_path):
+    rows_iter = graph.prepare_import_batches()
+    _, batch_1, copied_files = next(rows_iter)
+    # Should emit collections first
+    assert {r["model"] for r in batch_1[:2]} == {"Collection"}
+    # Each batch should contain all files for the works in that batch
+    filenames = []
+    batch_ids = []
+    for batch in chain([[0, batch_1[2:], []]], rows_iter):
+        rows = batch[1]
+        batch_ids.append(batch[0])
+        copied_files.extend(batch[2])
+        work_ids = [row["bulkrax_id"] for row in rows if row["model"] != "FileSet"]
+        file_parents = [row["parents"] for row in rows if row["model"] == "FileSet"]
+        for f_p in file_parents:
+            assert f_p in work_ids
+        filenames.extend([row["file"] for row in rows if row["model"] == "FileSet"])
+    for file in filenames:
+        assert file in [f.name for f in copied_files]
+    assert len(filenames) == len(copied_files)
