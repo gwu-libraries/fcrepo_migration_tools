@@ -1,11 +1,15 @@
-import requests
-from requests import HTTPError
-import click
 import logging
+import subprocess
 from pathlib import Path
 from typing import List
-from pyoxigraph import Store, parse, serialize, NamedNode, RdfFormat
-import subprocess
+
+import click
+import requests
+from pyoxigraph import NamedNode, RdfFormat, Store, parse, serialize
+from requests import HTTPError
+from yaml import Loader, load
+
+from pytools.fcrepo_to_bulkrax import FedoraGraph
 
 logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
@@ -124,6 +128,16 @@ def remove_orphans(objects):
             uri = uri.replace("localhost", "127.0.0.1")
             logging.info(f"Deleting object {uri}")
             delete_object(session, uri)
+
+
+@main.command()
+@click.option(
+    "--config",
+    help="Path to config file (YAML) containing options for fcrepo_to_bulkrax tool.",
+)
+def extract_to_bulkrax(config):
+    with open(config) as f:
+        options = load(config, Loader=Loader)
 
 
 if __name__ == "__main__":

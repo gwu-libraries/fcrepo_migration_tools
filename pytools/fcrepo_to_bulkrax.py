@@ -1,5 +1,6 @@
 import csv
-from collections import defaultdict
+import logging
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from csv import DictReader, DictWriter
 from dataclasses import dataclass, field, make_dataclass
@@ -14,6 +15,8 @@ from zipfile import ZipFile
 
 from more_itertools import before_and_after
 from pyoxigraph import Literal, Store
+
+logger = logging.getLogger(__name__)
 
 
 def make_model_class_instance(
@@ -166,22 +169,6 @@ class ParentChildMapping:
         return resource
 
 
-def batched(data: Iterable[tuple[Any, Any]], size: int) -> Iterator[Dict[Any, Any]]:
-    """Based on itertools.batched, but designed to return batches from a dictionary."""
-    if not isinstance(data, dict):
-        raise TypeError
-    batch = {}
-    counter = 0
-    for k, v in data.items():
-        if counter < size:
-            batch.update({k: v})
-            counter += 1
-        else:
-            yield batch
-            counter = 0
-            batch = {}
-
-
 def uri_to_id(uri: str | List[str]):
     if isinstance(uri, list):
         return [uri_to_id(element) for element in uri]
@@ -213,10 +200,18 @@ class FedoraGraph:
         """Provide a path to an Oxigraph RDF store, a path to a mapping of RDF predicates to Bulkrax fields, and a list satisfying the predicate info:fedora/fedora-system:def/model#hasModel for the types of works to be extracted.
         The mapping should be a CSV with headers "predicate" and "bulkrax_field".
         The list of models may either be a list of strings or a comma-separated string."""
-        self.store = Store.read_only(str(path_to_graph))
+        try:
+            self.store = Store.read_only(str(path_to_graph))
+        except Exception as e:
+            logger.error(f"Unable to load graph data from {path_to_graph}.", e)
+            raise
         self.path_to_root = path_to_root
         self.output_path = output_path
-        self.mapping = FedoraGraph.load_mapping(path_to_mapping)
+        try:
+            self.mapping = FedoraGraph.load_mapping(path_to_mapping)
+        except Exception as e:
+            logger.error(f"Unable to load mapping file from {path_to_mapping}", e)
+            raise
         # Add the predicate the connects child works to parents
         if FedoraGraph.MEMBERSHIP_CHILD not in self.mapping:
             self.mapping[FedoraGraph.MEMBERSHIP_CHILD] = ("parents", True)
@@ -451,15 +446,18 @@ class FedoraGraph:
             pd.mkdir(parents=True)
         for fs in files:
             try:
-                out = copy2(fs.get_file_path(self.path_to_root), pd / fs.file)
+                file_path = fs.get_file_path(self.path_to_root)
+                out = copy2(file_path, pd / fs.file)
             except Exception as e:
+                logger.error(
+                    f"Unable to copy file {file_path} to {str(pd / fs.file)}", e
+                )
                 raise
-                # TO DO: log error
             output.append(out)
         return output
 
     def copy_files_concurrently(
-        self, path_to_destination: Path, file_sets: List[FileSet]
+        self, path_to_destination: Path, file_sets: List[FileSet], batch_num: int
     ):
         with ThreadPoolExecutor() as exe:
             # copy files in batches of 10
@@ -474,11 +472,8 @@ class FedoraGraph:
                 try:
                     data.extend(future.result())
                 except Exception as e:
+                    logger.error(f"Error copying files in batch {batch_num}", e)
                     continue
-                    # TO DO: log error with index of batch
-                else:
-                    continue
-                    # TO DO: log file paths
         return data
 
     def prepare_import_batches(
@@ -498,6 +493,7 @@ class FedoraGraph:
         collection_ids = []
         child_works = []
         child_work_filesets = []
+        import_counter = Counter()
         while not done:
             rows = []
             files_to_copy = []
@@ -523,6 +519,7 @@ class FedoraGraph:
                     if resource.model == "Collection":
                         collection_ids.append(resource.id)
                     rows.append(resource.format_row(self.format_for_bulkrax))
+                import_counter[resource.model] += 1
                 # Filesets should be in the same order as their parent works, ordered by work ID
                 # So we take from the FileSet iterator as long as the id matches that of the current work
                 # Collections don't have FileSets, when the resource is a collection, this should be None
@@ -538,16 +535,18 @@ class FedoraGraph:
                     else:
                         rows.append(file.format_row(self.format_for_bulkrax))
                         files_to_copy.append(file)
-
+                    import_counter["FileSet"] += 1
             new_paths = self.copy_files_concurrently(
-                self.output_path / f"batch_{batch}/files", files_to_copy
+                self.output_path / f"batch_{batch}/files", files_to_copy, batch
             )
             yield batch, rows, new_paths
+            total_msg = ", ".join(f"{k}: {v}" for k, v in import_counter.items())
+            logger.info(f"Prepared batch {batch}, total works: {total_msg}")
             batch += 1
         # If done, emit any child works as a last batch, ensuring that their parents have already been imported
         if child_works:
             new_paths = self.copy_files_concurrently(
-                self.output_path / f"batch_{batch}/files", child_work_filesets
+                self.output_path / f"batch_{batch}/files", child_work_filesets, batch
             )
             yield (
                 batch,
@@ -569,9 +568,17 @@ class FedoraGraph:
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)
-            with ZipFile(path_to_batch / f"import_{batch_id}.zip", "w") as f:
-                f.mkdir("files")
-                f.writestr(f"import{batch_id}.csv", data=output.getvalue())
-                for file in files_copied:
-                    file = Path(file)
-                    f.write(file, arcname=f"files/{file.name}")
+            try:
+                zipfile_path = path_to_batch / f"import_{batch_id}.zip"
+                with ZipFile(zipfile_path, "w") as f:
+                    f.mkdir("files")
+                    f.writestr(f"import{batch_id}.csv", data=output.getvalue())
+                    for file in files_copied:
+                        file = Path(file)
+                        f.write(file, arcname=f"files/{file.name}")
+                logger.info(
+                    f"Zip file prepared for batch {batch_id}: {str(zipfile_path)}"
+                )
+            except Exception as e:
+                logger.error(f"Error creating zipfile for batch {batch_id}", e)
+                raise
