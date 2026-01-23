@@ -1,6 +1,7 @@
 from itertools import chain, islice
 from os import listdir
 from pathlib import Path
+from re import L
 from zipfile import ZipFile
 
 import pytest
@@ -528,7 +529,9 @@ def test_bulkrax_rows(graph, output_path):
         rows = batch[1]
         batch_ids.append(batch[0])
         copied_files.extend(batch[2])
-        work_ids = [row["bulkrax_id"] for row in rows if row["model"] != "FileSet"]
+        work_ids = [
+            row["bulkrax_identifier"] for row in rows if row["model"] != "FileSet"
+        ]
         file_parents = [row["parents"] for row in rows if row["model"] == "FileSet"]
         for f_p in file_parents:
             assert f_p in work_ids

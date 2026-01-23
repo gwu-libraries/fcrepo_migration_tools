@@ -137,7 +137,9 @@ def remove_orphans(objects):
 )
 def extract_to_bulkrax(config):
     with open(config) as f:
-        options = load(config, Loader=Loader)
+        options = load(f, Loader=Loader)
+    graph = FedoraGraph(**options)
+    graph.prepare_imports()
 
 
 if __name__ == "__main__":

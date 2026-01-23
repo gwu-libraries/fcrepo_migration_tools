@@ -14,7 +14,6 @@ http://purl.org/dc/terms/modified,date_modified,FALSE
 http://purl.org/dc/terms/source,source,TRUE
 http://purl.org/dc/terms/title,title,TRUE
 http://purl.org/dc/terms/type,resource_type,TRUE
-http://schema.org/additionalType,collection_type_gid,FALSE
 http://schema.org/keywords,keyword,TRUE
 http://scholarspace.library.gwu.edu/ns#advisor,advisor,TRUE
 http://scholarspace.library.gwu.edu/ns#committee_member,committee_member,TRUE

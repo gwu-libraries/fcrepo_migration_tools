@@ -42,7 +42,9 @@ def make_model_class_instance(
     # Expect the AdminSet name to be the final element in each "triple"
     # We don't need to include it in the import CSV, but it needs to be set at time of import
     admin_set = triple["adminSet"].value if triple["adminSet"] else None
-    return model_class(id=id, admin_set=admin_set, **kwargs)
+    c = model_class(id=id, admin_set=admin_set, **kwargs)
+    c.columns = ["id"] + list(kwargs.keys())
+    return c
 
 
 @dataclass
@@ -206,7 +208,7 @@ class FedoraGraph:
             logger.error(f"Unable to load graph data from {path_to_graph}.", e)
             raise
         self.path_to_root = path_to_root
-        self.output_path = output_path
+        self.output_path = Path(output_path)
         try:
             self.mapping = FedoraGraph.load_mapping(path_to_mapping)
         except Exception as e:
@@ -272,7 +274,7 @@ class FedoraGraph:
                     [
                         formatter(k, v)
                         for k, v in self.__dict__.items()
-                        if k != "admin_set"
+                        if k in self.columns
                     ]
                 )
             },
@@ -427,8 +429,10 @@ class FedoraGraph:
         """Formats each value for Bulkrax, extracting resource identifiers from URI's, and combining duplicate fields using either a semicolon or a pipe."""
         if key in ("id", "parents"):
             value = uri_to_id(value)
+            if isinstance(value, list):
+                value = ";".join(value)
             if key == "id":
-                return "bulkrax_id", value
+                return "bulkrax_identifier", value
             else:
                 return key, value
         elif (key in self.pipe_delimited) and isinstance(value, list):
@@ -443,15 +447,16 @@ class FedoraGraph:
         output = []
         pd = Path(path_to_destination)
         if not pd.exists():
-            pd.mkdir(parents=True)
+            pd.mkdir()
         for fs in files:
             try:
                 file_path = fs.get_file_path(self.path_to_root)
                 out = copy2(file_path, pd / fs.file)
             except Exception as e:
-                logger.error(
-                    f"Unable to copy file {file_path} to {str(pd / fs.file)}", e
+                error_msg = (
+                    f"Unable to copy file {str(file_path)} to {str(pd / fs.file)}"
                 )
+                logger.error(error_msg, e)
                 raise
             output.append(out)
         return output
@@ -472,7 +477,8 @@ class FedoraGraph:
                 try:
                     data.extend(future.result())
                 except Exception as e:
-                    logger.error(f"Error copying files in batch {batch_num}", e)
+                    error_msg = f"Error copying files in batch {batch_num}"
+                    logger.error(error_msg, e)
                     continue
         return data
 
@@ -497,6 +503,7 @@ class FedoraGraph:
         while not done:
             rows = []
             files_to_copy = []
+            (self.output_path / f"batch_{batch}").mkdir(exist_ok=True)
             while len(rows) < self.batch_size:
                 resource = next(resource_iter, None)
                 # If no more resources, we are done
@@ -511,7 +518,7 @@ class FedoraGraph:
                 if (
                     hasattr(resource, "parents")
                     and resource.parents
-                    and (resource.parents not in collection_ids)
+                    and any([p not in collection_ids for p in resource.parents])
                 ):
                     # If it doesn't belong to a collection, then its parent would be another work
                     child_works.append(resource)
@@ -519,6 +526,12 @@ class FedoraGraph:
                     if resource.model == "Collection":
                         collection_ids.append(resource.id)
                     rows.append(resource.format_row(self.format_for_bulkrax))
+                    for row in rows:
+                        if not row["bulkrax_identifier"]:
+                            print(row)
+                            print(resource)
+                            print(resource.format_row(self.format_for_bulkrax))
+                            raise AssertionError
                 import_counter[resource.model] += 1
                 # Filesets should be in the same order as their parent works, ordered by work ID
                 # So we take from the FileSet iterator as long as the id matches that of the current work
@@ -530,7 +543,7 @@ class FedoraGraph:
                     file = self.embargos.update_resource(file)
                     file = self.permissions.update_resource(file)
                     # Is the last child work seen the parent of this fileset? If so, emit together
-                    if child_works and (child_works[-1].id == file.parents):
+                    if child_works and (child_works[-1].id in file.parents):
                         child_work_filesets.append(file)
                     else:
                         rows.append(file.format_row(self.format_for_bulkrax))
@@ -545,6 +558,7 @@ class FedoraGraph:
             batch += 1
         # If done, emit any child works as a last batch, ensuring that their parents have already been imported
         if child_works:
+            (self.output_path / f"batch_{batch}").mkdir(exist_ok=True)
             new_paths = self.copy_files_concurrently(
                 self.output_path / f"batch_{batch}/files", child_work_filesets, batch
             )
@@ -563,7 +577,7 @@ class FedoraGraph:
             path_to_batch = Path(self.output_path) / f"batch_{batch_id}"
             output = StringIO()
             writer = DictWriter(
-                output, fieldnames=list({[k for row in rows for k in row]})
+                output, fieldnames=list({k for row in rows for k in row})
             )
             writer.writeheader()
             for row in rows:
@@ -576,9 +590,9 @@ class FedoraGraph:
                     for file in files_copied:
                         file = Path(file)
                         f.write(file, arcname=f"files/{file.name}")
-                logger.info(
-                    f"Zip file prepared for batch {batch_id}: {str(zipfile_path)}"
-                )
+                msg = f"Zip file prepared for batch {batch_id}: {str(zipfile_path)}"
+                logger.info(msg)
             except Exception as e:
-                logger.error(f"Error creating zipfile for batch {batch_id}", e)
+                error_msg = f"Error creating zipfile for batch {batch_id}"
+                logger.error(error_msg, e)
                 raise
