@@ -19,32 +19,46 @@ from pyoxigraph import Literal, Store
 logger = logging.getLogger(__name__)
 
 
-def make_model_class_instance(
-    id: str,
-    triples: Iterator,
-    mapping: Dict[str, Tuple[str, bool]],
-    model_class,
-):
-    """
-    Helper method for creating instances of dataclasses from Fedora object models
-    """
-    kwargs = defaultdict(list)
-    for triple in triples:
-        if triple["p"].value in mapping:
-            # Get Bulkrax field from RDF predicate
-            (field_name, multiple) = mapping[triple["p"].value]
-            # Array fields
-            if multiple:
-                kwargs[field_name].append(triple["o"].value)
-            # Single-value fields
-            else:
-                kwargs[field_name] = triple["o"].value
-    # Expect the AdminSet name to be the final element in each "triple"
-    # We don't need to include it in the import CSV, but it needs to be set at time of import
-    admin_set = triple["adminSet"].value if triple["adminSet"] else None
-    c = model_class(id=id, admin_set=admin_set, **kwargs)
-    c.columns = ["id"] + list(kwargs.keys())
-    return c
+class Resource:
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    @classmethod
+    def make_resource(
+        cls, id: str, triples: Iterator, mapping: Dict[str, Tuple[str, bool]]
+    ):
+        """
+        Helper method for creating instances of resource classes from Fedora object models
+        """
+        kwargs = defaultdict(list)
+        for triple in triples:
+            if triple["p"].value in mapping:
+                # Get Bulkrax field from RDF predicate
+                (field_name, multiple) = mapping[triple["p"].value]
+                # Array fields
+                if multiple:
+                    kwargs[field_name].append(triple["o"].value)
+                # Single-value fields
+                else:
+                    kwargs[field_name] = triple["o"].value
+        # Expect the AdminSet name to be the final element in each "triple"
+        # We don't need to include it in the import CSV, but it needs to be set at time of import
+        admin_set = triple["adminSet"].value if triple["adminSet"] else None
+        return cls(id=id, admin_set=admin_set, **kwargs)
+
+    def format_row(self, formatter):
+        return dict(
+            [formatter(k, v) for k, v in self.__dict__.items() if k != "admin_set"]
+        )
+
+
+class Work(Resource):
+    pass
+
+
+class Collection(Resource):
+    pass
 
 
 @dataclass
@@ -217,9 +231,6 @@ class FedoraGraph:
         # Add the predicate the connects child works to parents
         if FedoraGraph.MEMBERSHIP_CHILD not in self.mapping:
             self.mapping[FedoraGraph.MEMBERSHIP_CHILD] = ("parents", True)
-        # FedoraGraph owns the Work and Collections classes because we dynamically generate them based on the supplied fields in the mapping
-        self.Work = FedoraGraph.create_resource_class("Work", self.mapping)
-        self.Collection = FedoraGraph.create_resource_class("Collection", self.mapping)
         if isinstance(models, str):
             self.models = models.split(",")
         else:
@@ -246,49 +257,13 @@ class FedoraGraph:
             for row in mapping
         }
 
-    @staticmethod
-    def create_resource_class(class_name: str, mapping: Dict[str, tuple[str, bool]]):
-        """
-        Returns a dynamically generated dataclass with the Bulkrax fields from the mapping provided
-        """
-
-        def make_resource(id: str, triples: List[Tuple[str, str, str]]):
-            """
-            Makes an instance of a Work dataclass from the provided triples. This object corresponds to a Hyrax work.
-            """
-            return make_model_class_instance(
-                id=id, triples=triples, mapping=mapping, model_class=resource_class
-            )
-
-        class_args = [("id", str), ("admin_set", str)]
-        for f in mapping.values():
-            if f[1]:
-                class_args.append((f[0], list[str], field(default_factory=list)))
-            else:
-                class_args.append((f[0], str, field(default="")))
-        resource_class = make_dataclass(
-            class_name,
-            fields=class_args,
-            namespace={
-                "format_row": lambda self, formatter: dict(
-                    [
-                        formatter(k, v)
-                        for k, v in self.__dict__.items()
-                        if k in self.columns
-                    ]
-                )
-            },
-        )
-        resource_class.make_resource = staticmethod(make_resource)
-        return resource_class
-
     def get_resources(self, model) -> Iterator:
         """
         Returns all works, optionally limited to a given Hyrax AdminSet
         """
         admin_set_values = ""
         admin_set_criteria = ""
-        if model == self.Collection:
+        if model == Collection:
             models_str = '"Collection"'
         else:
             models_str = " ".join([f'"{model}"' for model in self.models])
@@ -324,7 +299,7 @@ class FedoraGraph:
 
         # Return results grouped by ID
         for k, g in groupby(self.store.query(query), key=lambda r: r["s"].value):
-            yield model.make_resource(id=k, triples=g)
+            yield model.make_resource(id=k, triples=g, mapping=self.mapping)
 
     def get_filesets(self) -> Iterator[Tuple[str, FileSet]]:
         """Returns all filesets with references to parent works and file URI's."""
@@ -490,9 +465,7 @@ class FedoraGraph:
         # Using manual iterators in order to be precise about the batch size
         # Exhaust collections first, then works
         # This ensures collections will be imported first
-        resource_iter = chain(
-            self.get_resources(self.Collection), self.get_resources(self.Work)
-        )
+        resource_iter = chain(self.get_resources(Collection), self.get_resources(Work))
         fileset_iter = self.get_filesets()
         batch = 0
         done = False

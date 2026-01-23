@@ -8,11 +8,13 @@ import pytest
 from more_itertools import before_and_after
 from pyoxigraph import Literal, NamedNode
 from pytools.fcrepo_to_bulkrax import (
+    Collection,
     EmbargoMapping,
     FedoraGraph,
     FileSet,
     ParentChildMapping,
     PermissionsMapping,
+    Work,
 )
 
 
@@ -417,12 +419,12 @@ def embargos():
 
 @pytest.fixture()
 def works(graph):
-    return list(graph.get_resources(graph.Work))
+    return list(graph.get_resources(Work))
 
 
 @pytest.fixture()
 def collections(graph):
-    return list(graph.get_resources(graph.Collection))
+    return list(graph.get_resources(Collection))
 
 
 @pytest.fixture()
@@ -440,7 +442,9 @@ def test_fileset(a_fileset_result, a_fileset_id, a_work_id, a_file_uri, a_filena
 
 
 def test_collection(graph, a_collection_id, a_collection_result):
-    collection = graph.Collection.make_resource(a_collection_id, a_collection_result)
+    collection = Collection.make_resource(
+        a_collection_id, a_collection_result, graph.mapping
+    )
     assert collection.id == "http://localhost:8984/rest/prod/j6/73/13/76/j67313767"
     assert collection.keyword == ["Keyword Collection 1"]
     assert collection.depositor == "admin@example.com"
