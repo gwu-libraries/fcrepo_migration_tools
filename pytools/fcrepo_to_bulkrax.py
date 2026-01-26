@@ -58,7 +58,11 @@ class Work(Resource):
 
 
 class Collection(Resource):
-    pass
+    def format_row(self, formatter):
+        # Patching for now: can't have the creator field blank when importing collections
+        if not hasattr(self, "creator") or not getattr(self, "creator"):
+            self.creator = "The George Washington University"
+        return super().format_row(formatter)
 
 
 @dataclass
@@ -427,13 +431,13 @@ class FedoraGraph:
             try:
                 file_path = fs.get_file_path(self.path_to_root)
                 out = copy2(file_path, pd / fs.file)
+                output.append(out)
             except Exception as e:
                 error_msg = (
                     f"Unable to copy file {str(file_path)} to {str(pd / fs.file)}"
                 )
                 logger.error(error_msg, e)
-                raise
-            output.append(out)
+                continue
         return output
 
     def copy_files_concurrently(
@@ -499,12 +503,6 @@ class FedoraGraph:
                     if resource.model == "Collection":
                         collection_ids.append(resource.id)
                     rows.append(resource.format_row(self.format_for_bulkrax))
-                    for row in rows:
-                        if not row["bulkrax_identifier"]:
-                            print(row)
-                            print(resource)
-                            print(resource.format_row(self.format_for_bulkrax))
-                            raise AssertionError
                 import_counter[resource.model] += 1
                 # Filesets should be in the same order as their parent works, ordered by work ID
                 # So we take from the FileSet iterator as long as the id matches that of the current work
@@ -515,6 +513,8 @@ class FedoraGraph:
                 for file in files:
                     file = self.embargos.update_resource(file)
                     file = self.permissions.update_resource(file)
+                    # Add the depositor from the parent work
+                    file.depositor = resource.depositor
                     # Is the last child work seen the parent of this fileset? If so, emit together
                     if child_works and (child_works[-1].id in file.parents):
                         child_work_filesets.append(file)
@@ -531,6 +531,8 @@ class FedoraGraph:
             batch += 1
         # If done, emit any child works as a last batch, ensuring that their parents have already been imported
         if child_works:
+            total_msg = ", ".join(f"{k}: {v}" for k, v in import_counter.items())
+            logger.info(f"Prepared batch {batch}, total works: {total_msg}")
             (self.output_path / f"batch_{batch}").mkdir(exist_ok=True)
             new_paths = self.copy_files_concurrently(
                 self.output_path / f"batch_{batch}/files", child_work_filesets, batch
