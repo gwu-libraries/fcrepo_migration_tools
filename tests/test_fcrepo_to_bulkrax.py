@@ -48,6 +48,15 @@ def output_path(tmp_path_factory):
     return tmp_path_factory.mktemp("bulkrax_output")
 
 
+@pytest.fixture(scope="session")
+def change_set_path(tmp_path_factory):
+    path_to_change_set = Path(tmp_path_factory.mktemp("change_set")) / "change_set.csv"
+    csv_data = """id,creator\nj6731377h,The George Washington University\nv979v304g,The George Washington University"""
+    with open(path_to_change_set, "w") as f:
+        f.write(csv_data)
+    return path_to_change_set
+
+
 @pytest.fixture()
 def a_fileset_id():
     return "http://localhost:8984/rest/prod/0r/96/73/72/0r967372b"
@@ -318,7 +327,7 @@ def a_collection_result():
 
 
 @pytest.fixture(scope="session")
-def graph(fcrepo_graph, fcrepo_export, output_path):
+def graph(fcrepo_graph, fcrepo_export, output_path, change_set_path):
     fg = FedoraGraph(
         path_to_graph=fcrepo_graph / "fcrepo-graph",
         path_to_root=fcrepo_export,
@@ -326,6 +335,7 @@ def graph(fcrepo_graph, fcrepo_export, output_path):
         output_path=output_path,
         models="GwWork,GwEtd,GwJournalIssue",
         pipe_delimited="license,rights_statement,doi,related_url",
+        change_set=change_set_path,
         batch_size=5,
     )
     return fg
@@ -398,22 +408,22 @@ def parents_children():
 @pytest.fixture()
 def permissions():
     return {
-        "cj82k728n": "restricted",
-        "05741r680": "restricted",
-        "2v23vt362": "restricted",
-        "t722h8817": "private",
-        "n296wz12m": "private",
-        "6q182k12h": "restricted",
-        "8336h188j": "private",
+        "cj82k728n": "authenticated",
+        "05741r680": "authenticated",
+        "2v23vt362": "authenticated",
+        "t722h8817": "restricted",
+        "n296wz12m": "restricted",
+        "6q182k12h": "authenticated",
+        "8336h188j": "restricted",
     }
 
 
 @pytest.fixture()
 def embargos():
     return {
-        "2v23vt362": ("authenticated", "2026-12-17T00:00:00Z", "open"),
-        "t722h8817": ("restricted", "2026-12-31T00:00:00Z", "open"),
-        "05741r680": ("authenticated", "2026-12-17T00:00:00Z", "open"),
+        "2v23vt362": ("authenticated", "2026-12-17", "open"),
+        "t722h8817": ("restricted", "2026-12-31", "open"),
+        "05741r680": ("authenticated", "2026-12-17", "open"),
     }
 
 
@@ -508,7 +518,7 @@ def test_embargos(graph, works, filesets, embargos):
             assert resource.visibility == "embargo"
             assert (
                 resource.visibility_during_embargo,
-                resource.release_date,
+                resource.embargo_release_date,
                 resource.visibility_after_embargo,
             ) == embargos[r_id]
         else:
@@ -519,6 +529,12 @@ def test_ordering(works, filesets, collections):
     work = works[0]
     fileset = filesets[0]
     assert work.id == fileset.parents
+
+
+def test_change_set(graph):
+    for collection in graph.get_resources(Collection):
+        graph.change_set.apply_changes(collection)
+        assert collection.creator
 
 
 def test_bulkrax_rows(graph, output_path):

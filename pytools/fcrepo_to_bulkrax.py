@@ -123,10 +123,10 @@ class PermissionsMapping:
                 self.permissions_per_resource[k].append(row["agent"].value)
         return self
 
-    def update_resource(self, resource):
+    def update_resource(self, resource: Resource | FileSet) -> Resource | FileSet:
         permission = self.permissions_per_resource.get(resource.id)
         if permission:
-            visibility = "private"
+            visibility = "restricted"
             for group_uri in permission:
                 group_id = uri_to_id(group_uri).split("#")[-1]
                 match group_id:
@@ -134,7 +134,7 @@ class PermissionsMapping:
                         visibility = "open"
                         break
                     case "registered":
-                        visibility = "restricted"
+                        visibility = "authenticated"
             resource.visibility = visibility
         return resource
 
@@ -152,15 +152,18 @@ class EmbargoMapping:
             self.embargo_per_resource[r["resource"].value] = {
                 "visibility_during_embargo": r["visibilityDuringEmbargo"].value,
                 "visibility_after_embargo": r["visibilityAfterEmbargo"].value,
-                "release_date": r["releaseDate"].value,
+                "embargo_release_date": r["releaseDate"].value,
                 "visibility": "embargo",
             }
         return self
 
-    def update_resource(self, resource):
+    def update_resource(self, resource: Resource | FileSet) -> Resource | FileSet:
         embargo = self.embargo_per_resource.get(resource.id)
         if embargo:
             if is_active_embargo(embargo):
+                embargo["embargo_release_date"] = convert_date(
+                    embargo["embargo_release_date"]
+                )
                 for field, value in embargo.items():
                     setattr(resource, field, value)
             # If the embargo release date is in the past, update the visibility per the embargo instructions
@@ -182,10 +185,31 @@ class ParentChildMapping:
             self.parent_child_mapping[row["resource"].value].append(row["parent"].value)
         return self
 
-    def update_resource(self, resource):
+    def update_resource(self, resource: Resource | FileSet) -> Resource | FileSet:
         parents = self.parent_child_mapping.get(resource.id)
         if parents:
             resource.parents = parents
+        return resource
+
+
+class ChangeSet:
+    """For updating specific fields during migration."""
+
+    def __init__(self, change_set_path: str):
+        """Expects a path to a CSV, which should contain an "id" column as well as other columns corresponding to those used in a Bulrax import. For every identifier provided, any non-null values in the row will be substituted for the values associated with that column when outputting the Bulkrax csv."""
+        with open(change_set_path) as f:
+            reader = DictReader(f)
+            self.change_set = {r["id"]: r for r in reader}
+            for _id, row in self.change_set.items():
+                for k, v in row.items():
+                    if not v:
+                        # Remove any keys corresponding to null values
+                        del self.change_set[_id][k]
+
+    def apply_changes(self, resource: Resource | FileSet) -> Resource | FileSet:
+        if changes := self.change_set.get(uri_to_id(resource.id)):
+            for field, value in changes.items():
+                setattr(resource, field, value)
         return resource
 
 
@@ -195,9 +219,14 @@ def uri_to_id(uri: str | List[str]):
     return uri.split("/")[-1]
 
 
-def is_active_embargo(record):
+def convert_date(date_str: str) -> str:
+    # Format date without timestamp for Bulkrax
+    return datetime.fromisoformat(date_str).replace(tzinfo=None).strftime("%Y-%m-%d")
+
+
+def is_active_embargo(record) -> bool:
     return (
-        datetime.fromisoformat(record["release_date"]).replace(tzinfo=None)
+        datetime.fromisoformat(record["embargo_release_date"]).replace(tzinfo=None)
         >= datetime.now()
     )
 
@@ -215,6 +244,7 @@ class FedoraGraph:
         models: List[str] | str,
         admin_set: Optional[str] = None,
         pipe_delimited: Optional[List[str]] = None,
+        change_set: Optional[str] = None,
         batch_size: int = 50,
     ):
         """Provide a path to an Oxigraph RDF store, a path to a mapping of RDF predicates to Bulkrax fields, and a list satisfying the predicate info:fedora/fedora-system:def/model#hasModel for the types of works to be extracted.
@@ -241,6 +271,8 @@ class FedoraGraph:
             self.models = models
         self.admin_set = admin_set
         self.pipe_delimited = pipe_delimited if pipe_delimited else []
+        if change_set:
+            self.change_set = ChangeSet(change_set)
         self.batch_size = batch_size
         # Fedora graph data, URI's mapped to predicates
         # Load permissions and embargo data on initialization
@@ -426,7 +458,7 @@ class FedoraGraph:
         output = []
         pd = Path(path_to_destination)
         if not pd.exists():
-            pd.mkdir()
+            pd.mkdir(exist_ok=True)
         for fs in files:
             try:
                 file_path = fs.get_file_path(self.path_to_root)
@@ -488,9 +520,10 @@ class FedoraGraph:
                     done = True
                     break
                 # Add fields from relationships to ACL's, embargos, and parent works
-                resource = self.embargos.update_resource(resource)
                 resource = self.permissions.update_resource(resource)
+                resource = self.embargos.update_resource(resource)
                 resource = self.parents.update_resource(resource)
+                resource = self.change_set.apply_changes(resource)
                 # Not terribly elegant, but we don't want to emit rows for child works before their parents, or else they might be imported in the wrong order, leading to a broken relationship
                 if (
                     hasattr(resource, "parents")
@@ -511,8 +544,9 @@ class FedoraGraph:
                     lambda x: resource.id == x.parents, fileset_iter
                 )
                 for file in files:
-                    file = self.embargos.update_resource(file)
                     file = self.permissions.update_resource(file)
+                    file = self.embargos.update_resource(file)
+                    file = self.change_set.apply_changes(file)
                     # Add the depositor from the parent work
                     file.depositor = resource.depositor
                     # Is the last child work seen the parent of this fileset? If so, emit together

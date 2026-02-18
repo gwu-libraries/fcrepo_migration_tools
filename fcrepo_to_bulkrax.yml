@@ -5,4 +5,5 @@ path_to_mapping: ./fedora_bulkrax_mapping.csv
 models: GwWork,GwEtd,GwJournalIssue
 admin_set:
 pipe_delimited: license,rights_statement,doi,related_url
+change_set: ./bulkrax-change-set.csv
 batch_size: 25
