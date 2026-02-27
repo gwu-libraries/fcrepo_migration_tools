@@ -2,6 +2,9 @@ FROM ghcr.io/astral-sh/uv:python3.14-alpine
 
 ADD fcrepo_tools.py pyproject.toml /opt/app/
 ADD pytools/*.py  /opt/app/pytools/
+ADD fcrepo_to_bulkrax.yml /opt/app/
+ADD fedora_bulkrax_mapping.csv /opt/app/
+ADD bulkrax_change_set.csv /opt/app/
 
 WORKDIR /opt/app
 

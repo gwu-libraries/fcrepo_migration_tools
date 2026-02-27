@@ -1,4 +1,4 @@
-path_to_graph: /data/fcrepo-graph
+path_to_graph: /data/gwss-rdf
 path_to_root: /data/fedora-4.7.5-export
 output_path: /data/bulkrax-imports
 path_to_mapping: ./fedora_bulkrax_mapping.csv
@@ -6,4 +6,4 @@ models: GwWork,GwEtd,GwJournalIssue
 admin_set:
 pipe_delimited: license,rights_statement,doi,related_url
 change_set: ./bulkrax-change-set.csv
-batch_size: 25
+batch_size: 100
