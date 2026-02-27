@@ -10,7 +10,7 @@ sub_install() {
     # Installing Java
     sudo apt-get -y install openjdk-11-jre-headless
     # Creating the directory to hold the export
-    sudo mkdir -p /data/fedora-4.7.5-export && sudo chown -R ${USER:=$(/usr/bin/id -run)}:$USER /data/fedora-4.7.5-export/
+    sudo mkdir -p /data/migrate/fedora-4.7.5-export && sudo chown -R ${USER:=$(/usr/bin/id -run)}:$USER /data/migrate/fedora-4.7.5-export/
     # Downloading the export utility
     wget https://github.com/fcrepo-exts/fcrepo-import-export/releases/download/fcrepo-import-export-0.3.0/fcrepo-import-export-0.3.0.jar
 }
