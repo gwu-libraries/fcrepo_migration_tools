@@ -82,6 +82,7 @@ def rsync_ocfl(remote_path, local_path, rsync):
 @main.command()
 @click.option("--ttl", help="Path to TTL file to modify.")
 def remove_audits(ttl):
+    logging.info("Removing all child notes except rest/prod")
     g = parse(path=ttl)
     # Derive prefixes from original TTL file
     with open(ttl) as f:
