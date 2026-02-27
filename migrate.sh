@@ -10,7 +10,7 @@ sub_install() {
     # Installing Java
     sudo apt-get -y install openjdk-11-jre-headless
     # Creating the directory to hold the export
-    sudo mkdir -p /data/migrate/fedora-4.7.5-export && sudo chown -R ${USER:=$(/usr/bin/id -run)}:$USER /data/migrate/fedora-4.7.5-export/
+    sudo mkdir -p /data/migration/fedora-4.7.5-export && sudo chown -R ${USER:=$(/usr/bin/id -run)}:$USER /data/migrate/fedora-4.7.5-export/
     # Downloading the export utility
     wget https://github.com/fcrepo-exts/fcrepo-import-export/releases/download/fcrepo-import-export-0.3.0/fcrepo-import-export-0.3.0.jar
 }
@@ -19,7 +19,7 @@ sub_export() {
     # Should be run *outside* of a Docker container, otherwise, localhost will be unreachable
     echo "Exporting objects from Fedora 4."
     java -jar fcrepo-import-export-0.3.0.jar \
-         --dir /data/migrate/fedora-4.7.5-export \
+         --dir /data/migration/fedora-4.7.5-export \
          --user fedoraAdmin:fedoraAdmin \
          --mode export \
          --resource http://localhost:8984/rest/prod \
@@ -31,7 +31,7 @@ sub_export_rest() {
     # Exports just the rest.ttl object (for editing to exclude non /prod objects)
     # Should be run *outside* of a Docker container
     java -jar fcrepo-import-export-0.3.0.jar \
-         --dir /data/migrate/fedora-4.7.5-export \
+         --dir /data/migration/fedora-4.7.5-export \
          --user fedoraAdmin:fedoraAdmin \
          --mode export \
          --resource http://localhost:8984/rest \
