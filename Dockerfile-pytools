@@ -1,6 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.14-alpine
 
-ADD fcrepo_tools.py pyproject.toml pytools/*.py /opt/app/
+ADD fcrepo_tools.py pyproject.toml /opt/app/
+ADD pytools/*.py  /opt/app/pytools/
 
 WORKDIR /opt/app
 
