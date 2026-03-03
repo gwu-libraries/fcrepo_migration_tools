@@ -144,7 +144,7 @@ def remove_orphans(objects):
     default="",
     help="Title of admin set (to override value in YAML file)",
 )
-@click.options("--dry-run", is_flag=True)
+@click.option("--dry-run", is_flag=True)
 def extract_to_bulkrax(config, admin_set, dry_run):
     with open(config) as f:
         options = load(f, Loader=Loader)
