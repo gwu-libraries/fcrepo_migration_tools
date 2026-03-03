@@ -336,6 +336,7 @@ def graph(fcrepo_graph, fcrepo_export, output_path, change_set_path):
         models="GwWork,GwEtd,GwJournalIssue",
         pipe_delimited="license,rights_statement,doi,related_url",
         change_set=change_set_path,
+        field_defaults={"creator": "The George Washington University"},
         batch_size=5,
     )
     return fg
@@ -456,13 +457,16 @@ def test_collection(graph, a_collection_id, a_collection_result):
         a_collection_id, a_collection_result, graph.mapping
     )
     assert collection.id == "http://localhost:8984/rest/prod/j6/73/13/76/j67313767"
-    assert collection.keyword == ["Keyword Collection 1"]
-    assert collection.depositor == "admin@example.com"
-    assert collection.title == ["Collection 1"]
-    assert collection.creator == ["Author, Collection 1"]
-    assert collection.date_created == ["2025"]
-    assert collection.subject == ["Subject 1 Collection 1", "Subject 2 Collection 1"]
-    assert collection.model == "Collection"
+    assert collection.data["keyword"] == ["Keyword Collection 1"]
+    assert collection.data["depositor"] == "admin@example.com"
+    assert collection.data["title"] == ["Collection 1"]
+    assert collection.data["creator"] == ["Author, Collection 1"]
+    assert collection.data["date_created"] == ["2025"]
+    assert collection.data["subject"] == [
+        "Subject 1 Collection 1",
+        "Subject 2 Collection 1",
+    ]
+    assert collection.data["model"] == "Collection"
 
 
 def test_load_resources(works, collections, collection_ids, work_ids):
@@ -477,9 +481,9 @@ def test_load_resources(works, collections, collection_ids, work_ids):
 def test_value_types(works, single_values, multi_values):
     work = works[14]
     for field, value in single_values:
-        assert getattr(work, field) == [value]
+        assert work.data.get(field) == [value]
     for field, value in multi_values:
-        assert getattr(work, field) == value
+        assert work.data.get(field) == value
 
 
 def test_memberships(graph, works, parents_children):
@@ -488,7 +492,9 @@ def test_memberships(graph, works, parents_children):
     for parent, children in parents_children.items():
         for child in children:
             assert child in work_dict
-            assert parent in [p.split("/")[-1] for p in work_dict[child].parents]
+            assert parent in [
+                p.split("/")[-1] for p in work_dict[child].data.get("parents", [])
+            ]
 
 
 def test_permissions(graph, works, filesets, permissions):
@@ -496,12 +502,16 @@ def test_permissions(graph, works, filesets, permissions):
     works = [graph.permissions.update_resource(work) for work in works]
     filesets = [graph.permissions.update_resource(fileset) for fileset in filesets]
     for resource in works + filesets:
+        if hasattr(resource, "data"):
+            data = resource.data
+        else:
+            data = resource.__dict__
         r_id = resource.id.split("/")[-1]
         if r_id in permissions:
             count += 1
-            assert resource.visibility == permissions[r_id]
+            assert data["visibility"] == permissions[r_id]
         else:
-            assert resource.visibility == "open"
+            assert data["visibility"] == "open"
 
     assert count == len(permissions)
 
@@ -513,16 +523,20 @@ def test_embargos(graph, works, filesets, embargos):
     filesets = [graph.embargos.update_resource(fileset) for fileset in filesets]
 
     for resource in works + filesets:
+        if hasattr(resource, "data"):
+            data = resource.data
+        else:
+            data = resource.__dict__
         r_id = resource.id.split("/")[-1]
         if r_id in embargos:
-            assert resource.visibility == "embargo"
+            assert data["visibility"] == "embargo"
             assert (
-                resource.visibility_during_embargo,
-                resource.embargo_release_date,
-                resource.visibility_after_embargo,
+                data["visibility_during_embargo"],
+                data["embargo_release_date"],
+                data["visibility_after_embargo"],
             ) == embargos[r_id]
         else:
-            assert resource.visibility != "embargo"
+            assert data["visibility"] != "embargo"
 
 
 def test_ordering(works, filesets, collections):
@@ -534,7 +548,7 @@ def test_ordering(works, filesets, collections):
 def test_change_set(graph):
     for collection in graph.get_resources(Collection):
         graph.change_set.apply_changes(collection)
-        assert collection.creator
+        assert collection.data["creator"]
 
 
 def test_bulkrax_rows(graph, output_path):

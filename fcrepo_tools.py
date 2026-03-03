@@ -1,11 +1,13 @@
 import logging
 import subprocess
+from datetime import datetime as dt
 from pathlib import Path
 from typing import List
 
 import click
 import requests
 from pyoxigraph import NamedNode, RdfFormat, Store, parse, serialize
+from pythonjsonlogger.json import JsonFormatter
 from requests import HTTPError
 from yaml import Loader, load
 
@@ -134,11 +136,29 @@ def remove_orphans(objects):
 @main.command()
 @click.option(
     "--config",
+    default="./fcrepo_to_bulkrax.yml",
     help="Path to config file (YAML) containing options for fcrepo_to_bulkrax tool.",
 )
-def extract_to_bulkrax(config):
+@click.option(
+    "--admin-set",
+    default="",
+    help="Title of admin set (to override value in YAML file)",
+)
+@click.options("--dry-run", is_flag=True)
+def extract_to_bulkrax(config, admin_set, dry_run):
     with open(config) as f:
         options = load(f, Loader=Loader)
+    if admin_set:
+        options["admin_set"] = admin_set
+    options["dry_run"] = dry_run
+    if dry_run:
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+        handler = logging.FileHandler(
+            f"{options['output_path']}/{dt.now().timestamp()}.dry_run.log", mode="w"
+        )
+        handler.setFormatter(JsonFormatter())
+        logger.addHandler(handler)
     graph = FedoraGraph(**options)
     graph.prepare_imports()
 

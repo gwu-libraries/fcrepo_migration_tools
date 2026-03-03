@@ -1,32 +1,40 @@
-import csv
 import logging
+import re
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from csv import DictReader, DictWriter
-from dataclasses import dataclass, field, make_dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
 from itertools import chain, groupby
 from pathlib import Path
 from shutil import copy2
-from typing import Any, ClassVar, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
 from zipfile import ZipFile
 
 from more_itertools import before_and_after
-from pyoxigraph import Literal, Store
+from pyoxigraph import Store
 
 logger = logging.getLogger(__name__)
 
 
 class Resource:
-    def __init__(self, **kwargs):
+    def __init__(self, id, admin_set, field_defaults=None, **kwargs):
+        self.id = id
+        self.admin_set = admin_set
+        self.field_defaults = field_defaults
+        self.data = {}
         for key, value in kwargs.items():
-            setattr(self, key, value)
+            self.data[key] = value
 
     @classmethod
     def make_resource(
-        cls, id: str, triples: Iterator, mapping: Dict[str, Tuple[str, bool]]
+        cls,
+        id: str,
+        triples: Iterator,
+        mapping: Dict[str, Tuple[str, bool]],
+        field_defaults=None,
     ):
         """
         Helper method for creating instances of resource classes from Fedora object models
@@ -45,12 +53,28 @@ class Resource:
         # Expect the AdminSet name to be the final element in each "triple"
         # We don't need to include it in the import CSV, but it needs to be set at time of import
         admin_set = triple["adminSet"].value if triple["adminSet"] else None
-        return cls(id=id, admin_set=admin_set, **kwargs)
+        return cls(id=id, admin_set=admin_set, field_defaults=field_defaults, **kwargs)
+
+    def update(self, field, value):
+        # Used for setting visibility and embargoes on the resource, which happens after init
+        self.data[field] = value
+
+    @property
+    def parents(self):
+        return self.data.get("parents", [])
+
+    @property
+    def model(self):
+        return self.data["model"]
+
+    @property
+    def depositor(self):
+        return self.data["depositor"]
 
     def format_row(self, formatter):
-        return dict(
-            [formatter(k, v) for k, v in self.__dict__.items() if k != "admin_set"]
-        )
+        # Add the resource ID to the field/value pairs before formatting
+        self.data["id"] = self.id
+        return formatter(self.data)
 
 
 class Work(Resource):
@@ -59,9 +83,9 @@ class Work(Resource):
 
 class Collection(Resource):
     def format_row(self, formatter):
-        # Patching for now: can't have the creator field blank when importing collections
-        if not hasattr(self, "creator") or not getattr(self, "creator"):
-            self.creator = "The George Washington University"
+        # Can't have the creator field blank when importing collections
+        if not self.data.get("creator"):
+            self.data["creator"] = self.field_defaults["creator"]
         return super().format_row(formatter)
 
 
@@ -99,10 +123,12 @@ class FileSet:
         else:
             pass
 
+    def update(self, field, value):
+        # For updating visibility and embargo attributes, post-init
+        setattr(self, field, value)
+
     def format_row(self, formatter):
-        return dict(
-            [formatter(k, v) for k, v in self.__dict__.items() if k != "file_uri"]
-        )
+        return formatter({k: v for k, v in self.__dict__.items() if k != "file_uri"})
 
 
 class PermissionsMapping:
@@ -135,7 +161,7 @@ class PermissionsMapping:
                         break
                     case "registered":
                         visibility = "authenticated"
-            resource.visibility = visibility
+            resource.update("visibility", visibility)
         return resource
 
 
@@ -164,11 +190,11 @@ class EmbargoMapping:
                 embargo["embargo_release_date"] = convert_date(
                     embargo["embargo_release_date"]
                 )
-                for field, value in embargo.items():
-                    setattr(resource, field, value)
+                for k, v in embargo.items():
+                    resource.update(k, v)
             # If the embargo release date is in the past, update the visibility per the embargo instructions
             else:
-                resource.visibility = embargo["visibility_after_embargo"]
+                resource.update("visibility", embargo["visibility_after_embargo"])
         return resource
 
 
@@ -188,7 +214,7 @@ class ParentChildMapping:
     def update_resource(self, resource: Resource | FileSet) -> Resource | FileSet:
         parents = self.parent_child_mapping.get(resource.id)
         if parents:
-            resource.parents = parents
+            resource.update("parents", parents)
         return resource
 
 
@@ -209,7 +235,7 @@ class ChangeSet:
     def apply_changes(self, resource: Resource | FileSet) -> Resource | FileSet:
         if changes := self.change_set.get(uri_to_id(resource.id)):
             for field, value in changes.items():
-                setattr(resource, field, value)
+                resource.update(field, value)
         return resource
 
 
@@ -245,7 +271,9 @@ class FedoraGraph:
         admin_set: Optional[str] = None,
         pipe_delimited: Optional[List[str]] = None,
         change_set: Optional[str] = None,
+        field_defaults: Optional[Dict[str, str]] = None,
         batch_size: int = 50,
+        dry_run: bool = False,
     ):
         """Provide a path to an Oxigraph RDF store, a path to a mapping of RDF predicates to Bulkrax fields, and a list satisfying the predicate info:fedora/fedora-system:def/model#hasModel for the types of works to be extracted.
         The mapping should be a CSV with headers "predicate" and "bulkrax_field".
@@ -273,7 +301,10 @@ class FedoraGraph:
         self.pipe_delimited = pipe_delimited if pipe_delimited else []
         if change_set:
             self.change_set = ChangeSet(change_set)
+        if field_defaults:
+            self.field_defaults = field_defaults
         self.batch_size = batch_size
+        self.dry_run = dry_run
         # Fedora graph data, URI's mapped to predicates
         # Load permissions and embargo data on initialization
         self.permissions = self.get_permissions()
@@ -335,7 +366,12 @@ class FedoraGraph:
 
         # Return results grouped by ID
         for k, g in groupby(self.store.query(query), key=lambda r: r["s"].value):
-            yield model.make_resource(id=k, triples=g, mapping=self.mapping)
+            yield model.make_resource(
+                id=k,
+                triples=g,
+                mapping=self.mapping,
+                field_defaults=self.field_defaults,
+            )
 
     def get_filesets(self) -> Iterator[Tuple[str, FileSet]]:
         """Returns all filesets with references to parent works and file URI's."""
@@ -436,22 +472,26 @@ class FedoraGraph:
         """
         return EmbargoMapping().make_mapping(self.store.query(query))
 
-    def format_for_bulkrax(self, key: str, value: str | List[str]) -> Tuple[str, str]:
+    def format_for_bulkrax(self, data: Dict[str, str]) -> Dict[str, str]:
         """Formats each value for Bulkrax, extracting resource identifiers from URI's, and combining duplicate fields using either a semicolon or a pipe."""
-        if key in ("id", "parents"):
-            value = uri_to_id(value)
-            if isinstance(value, list):
-                value = ";".join(value)
-            if key == "id":
-                return "bulkrax_identifier", value
-            else:
-                return key, value
-        elif (key in self.pipe_delimited) and isinstance(value, list):
-            return key, "|".join(value)
-        elif isinstance(value, list):
-            return key, "; ".join(value)
-        else:
-            return key, value
+        row = data.copy()
+        for key, value in data.items():
+            if key in ("id", "parents"):
+                value = uri_to_id(value)
+                if isinstance(value, list):
+                    row[key] = ";".join(value)
+                elif key == "id":
+                    # model_key = re.sub(
+                    #    r"([a-z])([A-Z])", r"\1_\2", data["model"]
+                    # ).lower()
+                    row["bulkrax_identifier"] = value  # f"{model_key}s_{value}"
+                else:
+                    row[key] = value
+            elif (key in self.pipe_delimited) and isinstance(value, list):
+                row[key] = "|".join(value)
+            elif isinstance(value, list):
+                row[key] = "; ".join(value)
+        return row
 
     def copy_files(self, path_to_destination: Path, files: List[FileSet]) -> List[str]:
         """Copy binary files associated with filesets to the specified destination. Renames file using filename metadata."""
@@ -460,16 +500,26 @@ class FedoraGraph:
         if not pd.exists():
             pd.mkdir(exist_ok=True)
         for fs in files:
-            try:
-                file_path = fs.get_file_path(self.path_to_root)
-                out = copy2(file_path, pd / fs.file)
-                output.append(out)
-            except Exception as e:
-                error_msg = (
-                    f"Unable to copy file {str(file_path)} to {str(pd / fs.file)}"
+            file_path = fs.get_file_path(self.path_to_root)
+            if self.dry_run:
+                output.append(
+                    {
+                        "filset_id": fs.id,
+                        "path_to_binary": file_path,
+                        "file_name": fs.file,
+                        "found": bool(file_path),
+                    }
                 )
-                logger.error(error_msg, e)
-                continue
+            else:
+                try:
+                    out = copy2(file_path, pd / fs.file)
+                    output.append(out)
+                except Exception as e:
+                    error_msg = (
+                        f"Unable to copy file {str(file_path)} to {str(pd / fs.file)}"
+                    )
+                    logger.error(error_msg, e)
+                    continue
         return output
 
     def copy_files_concurrently(
@@ -509,10 +559,16 @@ class FedoraGraph:
         child_works = []
         child_work_filesets = []
         import_counter = Counter()
+        admin_set = (self.admin_set or "").replace(" ", "_").lower()
+        if self.admin_set:
+            logger.info(f"Getting objects for resources in admin set {self.admin_set}")
+        else:
+            logger.info("Getting all objects in respository.")
         while not done:
             rows = []
             files_to_copy = []
-            (self.output_path / f"batch_{batch}").mkdir(exist_ok=True)
+            self.path_to_batch = Path(self.output_path) / f"batch_{admin_set}_{batch}"
+            self.path_to_batch.mkdir(exist_ok=True)
             while len(rows) < self.batch_size:
                 resource = next(resource_iter, None)
                 # If no more resources, we are done
@@ -525,11 +581,7 @@ class FedoraGraph:
                 resource = self.parents.update_resource(resource)
                 resource = self.change_set.apply_changes(resource)
                 # Not terribly elegant, but we don't want to emit rows for child works before their parents, or else they might be imported in the wrong order, leading to a broken relationship
-                if (
-                    hasattr(resource, "parents")
-                    and resource.parents
-                    and any([p not in collection_ids for p in resource.parents])
-                ):
+                if any([p not in collection_ids for p in resource.parents]):
                     # If it doesn't belong to a collection, then its parent would be another work
                     child_works.append(resource)
                 else:
@@ -550,14 +602,14 @@ class FedoraGraph:
                     # Add the depositor from the parent work
                     file.depositor = resource.depositor
                     # Is the last child work seen the parent of this fileset? If so, emit together
-                    if child_works and (child_works[-1].id in file.parents):
+                    if child_works and (child_works[-1].id == file.parents):
                         child_work_filesets.append(file)
                     else:
                         rows.append(file.format_row(self.format_for_bulkrax))
                         files_to_copy.append(file)
                     import_counter["FileSet"] += 1
             new_paths = self.copy_files_concurrently(
-                self.output_path / f"batch_{batch}/files", files_to_copy, batch
+                self.path_to_batch / "files", files_to_copy, batch
             )
             yield batch, rows, new_paths
             total_msg = ", ".join(f"{k}: {v}" for k, v in import_counter.items())
@@ -565,8 +617,6 @@ class FedoraGraph:
             batch += 1
         # If done, emit any child works as a last batch, ensuring that their parents have already been imported
         if child_works:
-            total_msg = ", ".join(f"{k}: {v}" for k, v in import_counter.items())
-            logger.info(f"Prepared batch {batch}, total works: {total_msg}")
             (self.output_path / f"batch_{batch}").mkdir(exist_ok=True)
             new_paths = self.copy_files_concurrently(
                 self.output_path / f"batch_{batch}/files", child_work_filesets, batch
@@ -580,28 +630,41 @@ class FedoraGraph:
                 new_paths,
             )
 
+    def make_csv(self, rows):
+        output = StringIO()
+        writer = DictWriter(output, fieldnames=list({k for row in rows for k in row}))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+        return output.getvalue()
+
+    def save_zip(self, csv_data, batch_id, files):
+        try:
+            zipfile_path = self.path_to_batch / f"import_{batch_id}.zip"
+            with ZipFile(zipfile_path, "w") as f:
+                f.mkdir("files")
+                f.writestr(f"import_{batch_id}.csv", data=csv_data)
+                for file in files:
+                    file = Path(file)
+                    f.write(file, arcname=f"files/{file.name}")
+            msg = f"Zip file prepared for batch {batch_id}: {str(zipfile_path)}"
+            logger.info(msg)
+        except Exception as e:
+            error_msg = f"Error creating zipfile for batch {batch_id}"
+            logger.error(error_msg, e)
+            raise
+
     def prepare_imports(self):
         # Prepare and zip import CSV and files
         for batch_id, rows, files_copied in self.prepare_import_batches():
-            path_to_batch = Path(self.output_path) / f"batch_{batch_id}"
-            output = StringIO()
-            writer = DictWriter(
-                output, fieldnames=list({k for row in rows for k in row})
-            )
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
-            try:
-                zipfile_path = path_to_batch / f"import_{batch_id}.zip"
-                with ZipFile(zipfile_path, "w") as f:
-                    f.mkdir("files")
-                    f.writestr(f"import{batch_id}.csv", data=output.getvalue())
-                    for file in files_copied:
-                        file = Path(file)
-                        f.write(file, arcname=f"files/{file.name}")
-                msg = f"Zip file prepared for batch {batch_id}: {str(zipfile_path)}"
-                logger.info(msg)
-            except Exception as e:
-                error_msg = f"Error creating zipfile for batch {batch_id}"
-                logger.error(error_msg, e)
-                raise
+            if self.dry_run:
+                for i, row in enumerate(rows):
+                    logger.debug({"batch": batch_id, "row": i, "data": row})
+                for f in files_copied:
+                    logger.debug({"batch": batch_id, "file": f})
+            else:
+                self.save_zip(
+                    csv_data=self.make_csv(rows),
+                    batch_id=batch_id,
+                    files=files_copied,
+                )
