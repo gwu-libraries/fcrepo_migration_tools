@@ -335,7 +335,7 @@ class FedoraGraph:
         else:
             models_str = " ".join([f'"{model}"' for model in self.models])
             if self.admin_set:
-                admin_set_values = "values ?adminSet {{ {admin_set} }}".format(
+                admin_set_values = 'values ?adminSet {{ "{admin_set}" }}'.format(
                     admin_set=self.admin_set
                 )
             admin_set_criteria = """?s partOf: ?a.
@@ -378,7 +378,7 @@ class FedoraGraph:
         if self.admin_set:
             admin_set_values = """
           values ?adminSetModel {{ "AdminSet" }}
-          values ?adminSet {{ {admin_set} }}
+          values ?adminSet {{ "{admin_set}" }}
           """.format(admin_set=self.admin_set)
             admin_set_criteria = """
           ?s partOf: ?a.
@@ -392,6 +392,8 @@ class FedoraGraph:
           PREFIX fedora_repo: <http://fedora.info/definitions/v4/repository#>
           prefix ns: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
           prefix pcdm: <http://pcdm.org/models#>
+          prefix partOf: <http://purl.org/dc/terms/isPartOf>
+          prefix title: <http://purl.org/dc/terms/title>
 
           select distinct (?s as ?work) (?fs as ?fileset) (?fn as ?filename) (?fu as ?file_uri)
           where {{

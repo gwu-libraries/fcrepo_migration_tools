@@ -333,6 +333,7 @@ def graph(fcrepo_graph, fcrepo_export, output_path, change_set_path):
         path_to_root=fcrepo_export,
         path_to_mapping="./fedora_bulkrax_mapping.csv",
         output_path=output_path,
+        admin_set="Default Admin Set",
         models="GwWork,GwEtd,GwJournalIssue",
         pipe_delimited="license,rights_statement,doi,related_url",
         change_set=change_set_path,
