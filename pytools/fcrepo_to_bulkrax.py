@@ -661,7 +661,8 @@ class FedoraGraph:
 
     def cleanup_files(self, files):
         for file in files:
-            Path(file).unlink()
+            if Path(file).exists():
+                Path(file).unlink()
         if (self.path_to_batch / "files").exists():
             (self.path_to_batch / "files").rmdir()
         self.path_to_batch.rmdir()
