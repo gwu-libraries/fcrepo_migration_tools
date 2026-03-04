@@ -644,10 +644,10 @@ class FedoraGraph:
 
     def save_zip(self, csv_data, batch_id, files):
         try:
-            zipfile_path = self.output_path / f"import_{batch_id}.zip"
+            zipfile_path = self.output_path / f"{self.path_to_batch.name}.zip"
             with ZipFile(zipfile_path, "w") as f:
                 f.mkdir("files")
-                f.writestr(f"import_{batch_id}.csv", data=csv_data)
+                f.writestr(f"{self.path_to_batch.name}.csv", data=csv_data)
                 for file in files:
                     file = Path(file)
                     f.write(file, arcname=f"files/{file.name}")
