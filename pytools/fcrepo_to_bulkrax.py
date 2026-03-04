@@ -493,14 +493,15 @@ class FedoraGraph:
                 row[key] = "|".join(value)
             elif isinstance(value, list):
                 row[key] = "; ".join(value)
+        # Exclude the original ID from the CSV for export
+        del row["id"]
         return row
 
     def copy_files(self, path_to_destination: Path, files: List[FileSet]) -> List[str]:
         """Copy binary files associated with filesets to the specified destination. Renames file using filename metadata."""
         output = []
         pd = Path(path_to_destination)
-        if not pd.exists():
-            pd.mkdir(exist_ok=True)
+        pd.mkdir(exist_ok=True)
         for fs in files:
             file_path = fs.get_file_path(self.path_to_root)
             if self.dry_run:
@@ -619,9 +620,10 @@ class FedoraGraph:
             batch += 1
         # If done, emit any child works as a last batch, ensuring that their parents have already been imported
         if child_works:
-            (self.output_path / f"batch_{batch}").mkdir(exist_ok=True)
+            self.path_to_batch = self.output_path / f"batch_{admin_set}_{batch}"
+            self.path_to_batch.mkdir(exist_ok=True)
             new_paths = self.copy_files_concurrently(
-                self.output_path / f"batch_{batch}/files", child_work_filesets, batch
+                self.path_to_batch / "files", child_work_filesets, batch
             )
             yield (
                 batch,
@@ -642,7 +644,7 @@ class FedoraGraph:
 
     def save_zip(self, csv_data, batch_id, files):
         try:
-            zipfile_path = self.path_to_batch / f"import_{batch_id}.zip"
+            zipfile_path = self.output_path / f"import_{batch_id}.zip"
             with ZipFile(zipfile_path, "w") as f:
                 f.mkdir("files")
                 f.writestr(f"import_{batch_id}.csv", data=csv_data)
@@ -655,6 +657,14 @@ class FedoraGraph:
             error_msg = f"Error creating zipfile for batch {batch_id}"
             logger.error(error_msg, e)
             raise
+        self.cleanup_files(files)
+
+    def cleanup_files(self, files):
+        for file in files:
+            Path(file).unlink()
+        if (self.path_to_batch / "files").exists():
+            (self.path_to_batch / "files").rmdir()
+        self.path_to_batch.rmdir()
 
     def prepare_imports(self):
         # Prepare and zip import CSV and files

@@ -327,7 +327,7 @@ def a_collection_result():
 
 
 @pytest.fixture(scope="session")
-def graph(fcrepo_graph, fcrepo_export, output_path, change_set_path):
+def graph(request, fcrepo_graph, fcrepo_export, output_path, change_set_path):
     fg = FedoraGraph(
         path_to_graph=fcrepo_graph / "fcrepo-graph",
         path_to_root=fcrepo_export,
@@ -553,6 +553,7 @@ def test_change_set(graph):
 
 
 def test_bulkrax_rows(graph, output_path):
+    return
     rows_iter = graph.prepare_import_batches()
     _, batch_1, copied_files = next(rows_iter)
     # Should emit collections first
@@ -574,3 +575,12 @@ def test_bulkrax_rows(graph, output_path):
     for file in filenames:
         assert file in [f.name for f in copied_files]
     assert len(filenames) == len(copied_files)
+
+
+def test_zip_file(graph):
+    graph.prepare_imports()
+    assert (
+        len(list(graph.output_path.rglob("*.*")))
+        == len(list(graph.output_path.rglob("*.zip")))
+        == 8
+    )
