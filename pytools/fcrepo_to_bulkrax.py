@@ -11,6 +11,7 @@ from pathlib import Path
 from shutil import copy2
 from typing import Dict, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
+from uuid import uuid1
 from zipfile import ZipFile
 
 from more_itertools import before_and_after
@@ -128,7 +129,10 @@ class FileSet:
         setattr(self, field, value)
 
     def format_row(self, formatter):
-        return formatter({k: v for k, v in self.__dict__.items() if k != "file_uri"})
+        row = formatter({k: v for k, v in self.__dict__.items() if k != "file_uri"})
+        # Don't re-use legacy ID for Bulkrax ID for filesets
+        row["bulkrax_identifier"] = str(uuid1())
+        return row
 
 
 class PermissionsMapping:
