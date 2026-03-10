@@ -9,7 +9,7 @@ sub_prepare() {
     # Prepare list of zipped files for ingest
     ls /data/migration/bulkrax-imports/*.zip  > /data/migration/bulkrax-imports/zip_files.txt
     # Replace paths with those for use inside the container
-    sed -i 's/\/data\/migration\/bulkrax-imports\//tmp\/imports\//'
+    sed -i 's/\/data\/migration\/bulkrax-imports\//tmp\/imports\//' /data/migration/bulkrax-imports/zip_files.txt
 }
 
 sub_run_import() {
