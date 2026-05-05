@@ -1,0 +1,11 @@
+gwss:
+  collection_resource: "https://raw.githubusercontent.com/gwu-libraries/scholarspace-5-test/refs/heads/main/config/metadata/collection_resource.yaml"
+  file_set_metadata': "https://raw.githubusercontent.com/gwu-libraries/scholarspace-5-test/refs/heads/main/config/metadata/file_set_metadata.yaml"
+  gw_etd: "https://raw.githubusercontent.com/gwu-libraries/scholarspace-5-test/refs/heads/main/config/metadata/gw_etd.yaml"
+  gw_work: "https://raw.githubusercontent.com/gwu-libraries/scholarspace-5-test/refs/heads/main/config/metadata/gw_work.yaml"
+  gw_journal_issue: "https://raw.githubusercontent.com/gwu-libraries/scholarspace-5-test/refs/heads/main/config/metadata/gw_journal_issue.yaml"
+hyrax:
+  core_metadata: "https://raw.githubusercontent.com/samvera/hyrax/refs/heads/main/config/metadata/core_metadata.yaml"
+  basic_metadata: "https://raw.githubusercontent.com/samvera/hyrax/refs/heads/main/config/metadata/basic_metadata.yaml"
+  file_set_metadata: "https://raw.githubusercontent.com/samvera/hyrax/refs/heads/main/config/metadata/file_set_metadata.yaml"
+  hyrax_internal_metadata: "https://raw.githubusercontent.com/samvera/hyrax/refs/heads/main/config/metadata/hyrax_internal_metadata.yaml"

@@ -305,8 +305,8 @@ class FedoraGraph:
         self.pipe_delimited = pipe_delimited if pipe_delimited else []
         if change_set:
             self.change_set = ChangeSet(change_set)
-        if field_defaults:
-            self.field_defaults = field_defaults
+        # if field_defaults:
+        self.field_defaults = field_defaults
         self.batch_size = batch_size
         self.dry_run = dry_run
         # Fedora graph data, URI's mapped to predicates
@@ -377,7 +377,7 @@ class FedoraGraph:
                 field_defaults=self.field_defaults,
             )
 
-    def get_filesets(self) -> Iterator[Tuple[str, FileSet]]:
+    def get_filesets(self) -> Iterator[FileSet]:
         """Returns all filesets with references to parent works and file URI's."""
         if self.admin_set:
             admin_set_values = """
