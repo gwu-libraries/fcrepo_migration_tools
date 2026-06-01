@@ -107,7 +107,13 @@ class FileSet:
             triple["filename"].value,
             triple["file_uri"].value,
         )
-        return FileSet(parents=parents, id=id, file=file, title=file, file_uri=file_uri)
+        return FileSet(
+            parents=parents,
+            id=id,
+            file=f"{uri_to_id(id)}_{file}",
+            title=file,
+            file_uri=file_uri,
+        )
 
     def get_file_path(self, path_to_root: str) -> Optional[Path]:
         """Construct the path to each (binary) file for copying."""

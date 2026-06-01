@@ -16,6 +16,7 @@ from pytools.fcrepo_to_bulkrax import (
     ParentChildMapping,
     PermissionsMapping,
     Work,
+    uri_to_id,
 )
 
 
@@ -74,7 +75,7 @@ def a_file_uri():
 
 
 @pytest.fixture()
-def a_filename():
+def a_filename(a_fileset_id):
     return "TestWordDoc.doc"
 
 
@@ -451,7 +452,7 @@ def test_fileset(a_fileset_result, a_fileset_id, a_work_id, a_file_uri, a_filena
     assert fs.id == a_fileset_id
     assert fs.file_uri == a_file_uri
     assert fs.title == a_filename
-    assert fs.file == a_filename
+    assert fs.file == f"{uri_to_id(a_fileset_id)}_{a_filename}"
 
 
 def test_collection(graph, a_collection_id, a_collection_result):
