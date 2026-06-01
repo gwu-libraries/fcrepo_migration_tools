@@ -1,4 +1,5 @@
 import asyncio
+import re
 import subprocess
 from collections import Counter, defaultdict
 from csv import DictReader
@@ -19,6 +20,7 @@ from botocore.credentials import Credentials
 from pyoxigraph import Literal, NamedNode, QuerySolutions, Store
 
 from pytools.fcrepo_to_bulkrax import FedoraGraph, Work
+from pytools.graph_part import GraphPart
 
 
 def to_camel_case(snake_str):
@@ -443,19 +445,19 @@ class MigrationDiff:
             if work["bulkrax_identifier"]
         }
         self.diff_log = DiffLog()
-        self.file_sets_to_parents = self._file_sets_to_parents()
+        self.file_set_lookup = self._file_set_lookup()
 
-    def _files_to_parents(self):
-        """Map file sets to their parent works, using the file's title and the parent's Bulkrax ID. (We aren't persisting the file's original identifier as its Bulkrax identifier, so matching requires this more roundabout approach."""
-        file_sets_to_parents = {}
+    def _file_set_lookup(self) -> Dict[tuple[str, str], Dict[str, str]]:
+        """Map file sets to their title and parent work's Bulkrax ID. (We aren't persisting the file's original identifier as its Bulkrax identifier, so matching requires this more roundabout approach."""
+        file_set_lookup = {}
         for f in self.f6_repo.file_sets:
             title = f["title"][0]
             try:
                 parent = f["parents"][0]
             except IndexError:
                 continue
-            file_sets_to_parents[(title, parent)] = f
-        return file_sets_to_parents
+            file_set_lookup[(title, parent)] = f
+        return file_set_lookup
 
     def match_visibility(self, key, original, migrated):
         """Handles embargoes, where the the to-be-migrated work/file set will have "embargo" for the value of the "visibility" field"""
@@ -528,14 +530,21 @@ class MigrationDiff:
         for f4_fs in self.f4_file_sets:
             parent_id = f4_fs.parents.split("/")[-1]
             title = f4_fs.title
+            original_id = (
+                f4_fs.id,
+                parent_id,
+                title,
+            )  # include parent ID and title so we can match on Bulkrax error logs
             try:
-                assert (title, parent_id) in self.file_sets_to_parents, (
+                assert (title, parent_id) in self.file_set_lookup, (
                     "Matching FileSet Not Found"
                 )
             except AssertionError as e:
-                self.diff_log.log_errors(str(e), original_id=f4_fs.id, model="FileSet")
+                self.diff_log.log_errors(
+                    str(e), original_id=original_id, model="FileSet"
+                )
                 continue
-            fs = self.file_sets_to_parents[(title, parent_id)]
+            fs = self.file_set_lookup[(title, parent_id)]
             for field, element in f4_fs.__dict__.items():
                 try:
                     # Only checking for visibility and embargo-related fields here, but the method will return True for any other field
@@ -543,7 +552,7 @@ class MigrationDiff:
                 except AssertionError as e:
                     self.diff_log.log_errors(
                         str(e),
-                        original_id=f4_fs.id,
+                        original_id=original_id,
                         migrated_id=fs["id"][0],
                         key=field,
                         migrated_value=fs[field],
@@ -598,15 +607,64 @@ class MigrationDiff:
             except AssertionError:
                 continue
 
+    def compare_checksums(self):
+        pass
+
     def run_checksums(
         self,
-        path_to_zips,
-        str,
-        file_sets_to_parents: Dict[str, Dict[str, List[str]]],
-        zip_file_pattern: str | None = None,
-    ):
-        """Given a path to a folder containing zipped import files, a mapping of filenames and parent works to file set metadata, and (optionally) a filename pattern, this method iterates through the zip files, updating the file set metadata with the relevant checksums"""
-        pass
+        path_to_zips: Path | str,
+        s3_checksums: Dict[str, Dict[str, str]],
+        zip_file_pattern: str = r"batch.*_\d+\.zip",
+    ) -> Iterator[tuple[str, List[Dict[str, str]]]]:
+        """Given a path to a folder containing zipped import files, a mapping of filenames and parent works to file set metadata, and (optionally) a filename pattern, this method iterates through the zip files, updating the file set metadata with the relevant checksum, matching the method to that computed by S3."""
+        path_to_zips = Path(path_to_zips)
+        tmp_path = path_to_zips.parents[0] / "tmp"
+        tmp_path.mkdir(exist_ok=True)
+        zip_file_pattern = re.compile(zip_file_pattern)
+        for zip_file in path_to_zips.glob("*.zip"):
+            if not zip_file_pattern.match(zip_file.name):
+                continue
+            with ZipFile(zip_file) as zf:
+                with zf.open(f"{zip_file.stem}.csv") as f:
+                    reader = DictReader(TextIOWrapper(f))
+                    rows = [r for r in reader]
+                    files_to_check = [
+                        {"file": r["file"], "parent": r["parents"]}
+                        for r in rows
+                        if r["model"] == "FileSet"
+                    ]
+                    checksums = []
+                    for file in files_to_check:
+                        fs = self.file_set_lookup.get((file["file"], file["parent"]))
+                        if not fs:
+                            continue
+                        if not fs["binary_ocfl"]:
+                            continue
+                        path_to_file = zf.extract(f"files/{file['file']}", tmp_path)
+                        h5_checksum = s3_checksums.get(fs["binary_ocfl"])
+                        if h5_checksum:
+                            if "ChecksumCRC32" in h5_checksum:
+                                checksum = etag_checksum(path_to_file)
+                                value = None
+                            else:
+                                value = h5_checksum["decoded_value"]
+                                method = "CRC-64/NVME"
+                                args = [
+                                    "/Users/dsmith/Documents/code/rust/crc-fast-rust/target/release/checksum",
+                                    "-a",
+                                    method,
+                                    "-f",
+                                    path_to_file,
+                                ]
+                                checksum = subprocess.run(
+                                    args, capture_output=True
+                                ).stdout
+                            file["h5_checksum"] = value
+                            file["original_checksum"] = checksum
+                            checksums.append(file)
+                        Path(path_to_file).unlink()
+            yield (str(zip_file), checksums)
+        rmtree(tmp_path)
 
 
 class S3OcflRepo:
@@ -618,6 +676,7 @@ class S3OcflRepo:
         region,
         bucket,
         path_to_ocfl: str,
+        graph: str | None = None,
     ):
         """:param credentials: AWS credentials with bucket access"""
         self.credentials = credentials
@@ -625,6 +684,36 @@ class S3OcflRepo:
         self.path_to_ocfl = path_to_ocfl
         self.region = region
         self.loop = asyncio.get_event_loop()  # For running async tasks
+        if graph:
+            self.graph = Store(graph)
+        else:
+            self.graph = None
+
+    def prepare_repo(self, inventory_key, download_path: str):
+        self.download_path = Path(download_path)
+        inventory_path = self.loop.run_until_complete(
+            self.download_inventory(inventory_key, download_path)
+        )
+        self.filter_inventory(inventory_path)
+        downloaded_objects = self.loop.run_until_complete(
+            self.download_nt_objects(
+                self.rdf_df.rows(named=True), self.download_path / "rdf"
+            )
+        )
+        self.graph = self.checksums = self.loop.run_until_complete(
+            self.get_object_checksums(self.originals.rows(named=True))
+        )
+        errors = [obj for obj in downloaded_objects if isinstance(obj, Exception)] + [
+            obj for obj in self.checksums if isinstance(obj, Exception)
+        ]
+        # TO DO: log errors
+        if not self.graph:
+            g = GraphPart(
+                dirs=[self.download_path / "rdf"],
+                store=str(self.download_path / "hyrax-5-migrated"),
+            )
+            g.walk()
+        return self
 
     async def download_inventory(self, inventory_key, download_path: str) -> Path:
         """Downloads file from S3 at the provided key."""
@@ -636,11 +725,7 @@ class S3OcflRepo:
             aws_access_key_id=self.credentials.access_key,
         ) as client:
             target = Path(download_path) / Path(inventory_key).name
-            await client.download_file(
-                self.bucket,
-                inventory_key,
-                str(target),
-            )
+            await self.fetch_object(client, inventory_key, target)
         return target
 
     async def fetch_checksum(self, client, key):
@@ -649,7 +734,7 @@ class S3OcflRepo:
         )
         return {"key": key, "checksum": response["Checksum"]}
 
-    async def fetch_nt(self, client, key, filepath):
+    async def fetch_object(self, client, key, filepath):
         """:param client: from abiobocore.get_session.session.create_client
         :param key: key to S3 object
         :param filepath: path to file for saving locally
@@ -662,11 +747,10 @@ class S3OcflRepo:
         return True
 
     async def download_nt_objects(
-        self, resources: list[dict[str, Any]], download_path_str: str
+        self, resources: list[dict[str, Any]], download_path: Path
     ):
         """:param resources: should contain a key column as well as a key_base column, which will be used to name the .nt file locally (and contains only the resource's full OCFL identifier"""
         session = get_session()
-        download_path = Path(download_path_str)
         async with session.create_client(
             "s3",
             region_name=self.region,
@@ -675,7 +759,7 @@ class S3OcflRepo:
         ) as client:
             tasks = asyncio.gather(
                 *[
-                    self.fetch_nt(
+                    self.fetch_object(
                         client,
                         key=resource["key"],
                         filepath=download_path / f"{resource['key_base']}.nt",
@@ -705,7 +789,7 @@ class S3OcflRepo:
             )
             return await tasks
 
-    def filter_inventory(self, path_to_inventory: str):
+    def filter_inventory(self, path_to_inventory: Path):
         """Loads and filters a parquet inventory from S3, producing two version: one retaining only the latest versions of all .nt files, the other retaining only files whose keys end with the string "original" (referring to original binaries)."""
         df = pl.read_parquet(path_to_inventory)
         # Filter the pola.rs DataFrame, retaining only .nt files, and unpacking the version label into its own column
