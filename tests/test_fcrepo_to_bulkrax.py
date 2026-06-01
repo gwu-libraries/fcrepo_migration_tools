@@ -80,10 +80,25 @@ def a_filename(a_fileset_id):
 
 
 @pytest.fixture()
+def another_filename(a_fileset_id):
+    return "Test Word Doc.doc"
+
+
+@pytest.fixture()
 def a_fileset_result(a_fileset_id, a_work_id, a_file_uri, a_filename):
     return {
         "fileset": NamedNode(a_fileset_id),
         "filename": Literal(a_filename),
+        "file_uri": NamedNode(a_file_uri),
+        "work": NamedNode(a_work_id),
+    }
+
+
+@pytest.fixture()
+def another_fileset_result(a_fileset_id, a_work_id, a_file_uri, another_filename):
+    return {
+        "fileset": NamedNode(a_fileset_id),
+        "filename": Literal(another_filename),
         "file_uri": NamedNode(a_file_uri),
         "work": NamedNode(a_work_id),
     }
@@ -446,13 +461,25 @@ def filesets(graph):
     return list(graph.get_filesets())
 
 
-def test_fileset(a_fileset_result, a_fileset_id, a_work_id, a_file_uri, a_filename):
+def test_fileset(
+    a_fileset_result,
+    a_fileset_id,
+    a_work_id,
+    a_file_uri,
+    a_filename,
+    another_fileset_result,
+    another_filename,
+):
     fs = FileSet.make_fileset(a_fileset_result)
     assert fs.parents == a_work_id
     assert fs.id == a_fileset_id
     assert fs.file_uri == a_file_uri
     assert fs.title == a_filename
     assert fs.file == f"{uri_to_id(a_fileset_id)}_{a_filename}"
+    fs = FileSet.make_fileset(
+        another_fileset_result
+    )  # Check for correct handling of filenames with spaces
+    assert fs.file == f"{uri_to_id(a_fileset_id)}_{another_filename.replace(' ', '')}"
 
 
 def test_collection(graph, a_collection_id, a_collection_result):

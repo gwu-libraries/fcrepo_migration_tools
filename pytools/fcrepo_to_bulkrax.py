@@ -98,6 +98,7 @@ class FileSet:
     title: str
     file_uri: str  # URI to binary resource
     model: str = "FileSet"
+    whitespace = re.compile(r"\s+")
 
     @staticmethod
     def make_fileset(triple):
@@ -110,7 +111,7 @@ class FileSet:
         return FileSet(
             parents=parents,
             id=id,
-            file=f"{uri_to_id(id)}_{file}",
+            file=f"{uri_to_id(id)}_{re.sub(FileSet.whitespace, '', file)}",  # Remove white spaces in file name and prefix with ID
             title=file,
             file_uri=file_uri,
         )
