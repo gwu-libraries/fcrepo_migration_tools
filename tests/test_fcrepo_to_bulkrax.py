@@ -10,12 +10,18 @@ from pyoxigraph import Literal, NamedNode
 
 from pytools.fcrepo_to_bulkrax import (
     Collection,
-    EmbargoMapping,
     FedoraGraph,
     FileSet,
+    Work,
+    is_active_embargo,
+)
+from pytools.mappings import (
+    EmbargoMapping,
     ParentChildMapping,
     PermissionsMapping,
-    Work,
+)
+from pytools.utils import (
+    is_active_embargo,
     uri_to_id,
 )
 
