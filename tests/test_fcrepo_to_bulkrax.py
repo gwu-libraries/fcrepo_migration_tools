@@ -7,6 +7,7 @@ from zipfile import ZipFile
 import pytest
 from more_itertools import before_and_after
 from pyoxigraph import Literal, NamedNode
+
 from pytools.fcrepo_to_bulkrax import (
     Collection,
     EmbargoMapping,
@@ -459,7 +460,6 @@ def test_collection(graph, a_collection_id, a_collection_result):
     )
     assert collection.id == "http://localhost:8984/rest/prod/j6/73/13/76/j67313767"
     assert collection.data["keyword"] == ["Keyword Collection 1"]
-    assert collection.data["depositor"] == "admin@example.com"
     assert collection.data["title"] == ["Collection 1"]
     assert collection.data["creator"] == ["Author, Collection 1"]
     assert collection.data["date_created"] == ["2025"]
@@ -468,6 +468,7 @@ def test_collection(graph, a_collection_id, a_collection_result):
         "Subject 2 Collection 1",
     ]
     assert collection.data["model"] == "Collection"
+    assert "depositor" not in collection.data
 
 
 def test_load_resources(works, collections, collection_ids, work_ids):

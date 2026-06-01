@@ -68,10 +68,6 @@ class Resource:
     def model(self):
         return self.data["model"]
 
-    @property
-    def depositor(self):
-        return self.data["depositor"]
-
     def format_row(self, formatter):
         # Add the resource ID to the field/value pairs before formatting
         self.data["id"] = self.id
@@ -606,8 +602,6 @@ class FedoraGraph:
                     file = self.permissions.update_resource(file)
                     file = self.embargos.update_resource(file)
                     file = self.change_set.apply_changes(file)
-                    # Add the depositor from the parent work
-                    file.depositor = resource.depositor
                     # Is the last child work seen the parent of this fileset? If so, emit together
                     if child_works and (child_works[-1].id == file.parents):
                         child_work_filesets.append(file)

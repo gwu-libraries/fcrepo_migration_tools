@@ -1,5 +1,4 @@
 predicate,bulkrax_field,multiple
-http://id.loc.gov/vocabulary/relators/dpt,depositor,FALSE
 http://purl.org/dc/elements/1.1/contributor,contributor,TRUE
 http://purl.org/dc/elements/1.1/creator,creator,TRUE
 http://purl.org/dc/elements/1.1/description,description,TRUE
@@ -7,10 +6,8 @@ http://purl.org/dc/elements/1.1/language,language,TRUE
 http://purl.org/dc/elements/1.1/publisher,publisher,TRUE
 http://purl.org/dc/terms/bibliographicCitation,bibliographic_citation,TRUE
 http://purl.org/dc/terms/created,date_created,TRUE
-http://purl.org/dc/terms/dateSubmitted,date_uploaded,FALSE
 http://purl.org/dc/terms/identifier,identifier,TRUE
 http://purl.org/dc/terms/license,license,TRUE
-http://purl.org/dc/terms/modified,date_modified,FALSE
 http://purl.org/dc/terms/source,source,TRUE
 http://purl.org/dc/terms/title,title,TRUE
 http://purl.org/dc/terms/type,resource_type,TRUE
