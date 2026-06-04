@@ -587,35 +587,27 @@ def test_change_set(graph):
         assert collection.data["creator"]
 
 
-def test_bulkrax_rows(graph, output_path):
-    return
-    rows_iter = graph.prepare_import_batches()
-    _, batch_1, copied_files = next(rows_iter)
-    # Should emit collections first
-    assert {r["model"] for r in batch_1[:2]} == {"Collection"}
-    # Each batch should contain all files for the works in that batch
-    filenames = []
-    batch_ids = []
-    for batch in chain([[0, batch_1[2:], []]], rows_iter):
-        rows = batch[1]
-        batch_ids.append(batch[0])
-        copied_files.extend(batch[2])
-        work_ids = [
-            row["bulkrax_identifier"] for row in rows if row["model"] != "FileSet"
-        ]
+def test_bulkrax_rows_order(graph):
+    already_seen = []  # track ID's that might appear as parents
+    for i, batch in enumerate(graph.prepare_import_batches()):
+        if i == 0:
+            assert {r["model"] for r in batch.rows[:2]} == {"Collection"}, (
+                "Collections should be emitted first"
+            )
+        rows = batch.rows
+        already_seen.extend(
+            [row["bulkrax_identifier"] for row in rows if row["model"] != "FileSet"]
+        )
         file_parents = [row["parents"] for row in rows if row["model"] == "FileSet"]
-        for f_p in file_parents:
-            assert f_p in work_ids
-        filenames.extend([row["file"] for row in rows if row["model"] == "FileSet"])
-    for file in filenames:
-        assert file in [f.name for f in copied_files]
-    assert len(filenames) == len(copied_files)
-
-
-def test_zip_file(graph):
-    graph.prepare_imports()
+        assert len(file_parents) == len(set(file_parents)), (
+            "Should emit only one file_set per parent per batch"
+        )
+        assert all(
+            [row["parents"] in already_seen for row in rows if "parents" in row]
+        ), "All references to parents should refer to works already emitted"
+        batch.save_zip()
     assert (
-        len(list(graph.output_path.rglob("*.*")))
-        == len(list(graph.output_path.rglob("*.zip")))
-        == 8
-    )
+        len(list(graph.batch_handler.output_path.rglob("*.*")))
+        == len(list(graph.batch_handler.output_path.rglob("*.zip")))
+        == 5
+    ), "CSV and files should be cleaned up, leaving only one zip per batch"
