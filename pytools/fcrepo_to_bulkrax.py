@@ -1,12 +1,14 @@
 import logging
 from collections import Counter
 from csv import DictReader, DictWriter
+from datetime import datetime
 from io import StringIO
 from itertools import chain, groupby
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 from zipfile import ZipFile
 
+import jsonlines
 from more_itertools import before_and_after
 from pyoxigraph import Store
 
@@ -352,13 +354,22 @@ class FedoraGraph:
             yield batch_result
             batch_result = self.batch_handler.current_batch()
 
+    def log_output(self, writer, batch):
+        for row in batch.rows:
+            writer.write({"batch": batch.batch_id, "row": row})
+        for f in batch.files_copied:
+            writer.write({"batch": batch.batch_id, "file": f})
+
     def prepare_imports(self):
-        # Prepare and zip import CSV and files
-        for batch in self.prepare_import_batches():
-            if self.batch_handler.dry_run:
-                for i, row in enumerate(batch.rows):
-                    logger.debug({"batch": batch.batch_id, "row": i, "data": row})
-                for f in batch.files_copied:
-                    logger.debug({"batch": batch.batch_id, "file": f})
-            else:
-                batch.save_zip()
+        admin_set_str = f"_{self.admin_set}" if self.admin_set else ""
+        with open(
+            Path(self.batch_handler.output_path)
+            / f"migration{admin_set_str}_{datetime.now().strftime('%Y-%m-%d')}",
+            "w",
+        ) as f:
+            with jsonlines.Writer(f) as writer:
+                # Prepare and zip import CSV and files
+                for batch in self.prepare_import_batches():
+                    self.log_output(writer, batch)
+                    if not self.batch_handler.dry_run:
+                        batch.save_zip()
