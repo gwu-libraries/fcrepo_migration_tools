@@ -152,7 +152,7 @@ class BatchHandler:
                 output.append(
                     {
                         "filset_id": fs.id,
-                        "path_to_binary": file_path,
+                        "path_to_binary": str(file_path),
                         "file_name": fs.file,
                         "found": bool(file_path),
                     }
