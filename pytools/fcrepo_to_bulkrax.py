@@ -52,7 +52,7 @@ class FedoraGraph:
         output_path,
         path_to_mapping: str,
         models: List[str] | str,
-        admin_set: Optional[str] = None,
+        admin_set: str = "",
         pipe_delimited: Optional[List[str]] = None,
         change_set: Optional[str] = None,
         field_defaults: Optional[Dict[str, str]] = None,
@@ -67,8 +67,15 @@ class FedoraGraph:
         except Exception as e:
             logger.error(f"Unable to load graph data from {path_to_graph}.", e)
             raise
+        self.admin_set = admin_set
+        if admin_set:
+            output_path = Path(output_path) / admin_set.replace(" ", "_").lower()
         self.batch_handler = BatchHandler(
-            batch_size, self.format_for_bulkrax, output_path, path_to_root, dry_run
+            batch_size,
+            self.format_for_bulkrax,
+            Path(output_path),
+            path_to_root,
+            dry_run,
         )
         try:
             self.mapping = FedoraGraph.load_mapping(path_to_mapping)
@@ -82,7 +89,6 @@ class FedoraGraph:
             self.models = models.split(",")
         else:
             self.models = models
-        self.admin_set = admin_set
         self.pipe_delimited = pipe_delimited if pipe_delimited else []
         if change_set:
             self.change_set = ChangeSet(change_set)
@@ -361,10 +367,9 @@ class FedoraGraph:
             writer.write({"batch": f"{batch.batch_id}", "file": f})
 
     def prepare_imports(self):
-        admin_set_str = f"_{self.admin_set}".replace(" ", "_") if self.admin_set else ""
         with open(
             Path(self.batch_handler.output_path)
-            / f"migration{admin_set_str}_{datetime.now().strftime('%Y-%m-%d')}.jsonl",
+            / f"migration_{datetime.now().strftime('%Y-%m-%d')}.jsonl",
             "w",
         ) as f:
             with jsonlines.Writer(f) as writer:
