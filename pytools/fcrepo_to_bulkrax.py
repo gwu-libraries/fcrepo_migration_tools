@@ -356,15 +356,15 @@ class FedoraGraph:
 
     def log_output(self, writer, batch):
         for row in batch.rows:
-            writer.write({"batch": batch.batch_id, "row": row})
+            writer.write({"batch": f"{batch.batch_id}", "row": row})
         for f in batch.files_copied:
-            writer.write({"batch": batch.batch_id, "file": f})
+            writer.write({"batch": f"{batch.batch_id}", "file": f})
 
     def prepare_imports(self):
-        admin_set_str = f"_{self.admin_set}" if self.admin_set else ""
+        admin_set_str = f"_{self.admin_set}".replace(" ", "_") if self.admin_set else ""
         with open(
             Path(self.batch_handler.output_path)
-            / f"migration{admin_set_str}_{datetime.now().strftime('%Y-%m-%d')}",
+            / f"migration{admin_set_str}_{datetime.now().strftime('%Y-%m-%d')}.jsonl",
             "w",
         ) as f:
             with jsonlines.Writer(f) as writer:

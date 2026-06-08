@@ -144,7 +144,8 @@ class BatchHandler:
         """Copy binary files associated with filesets to the specified destination. Renames file using filename metadata."""
         output = []
         pd = self.output_path / f"batch_{batch_id}/files"
-        pd.mkdir(parents=True, exist_ok=True)
+        if not self.dry_run:
+            pd.mkdir(parents=True, exist_ok=True)
         for fs in files:
             file_path = fs.get_file_path(self.path_to_root)
             if self.dry_run:
