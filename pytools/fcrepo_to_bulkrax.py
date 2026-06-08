@@ -358,7 +358,7 @@ class FedoraGraph:
         for row in batch.rows:
             writer.write({"batch": f"{batch.batch_id}", "row": row})
         for f in batch.files_copied:
-            writer.write({"batch": f"{batch.batch_id}", "file": f})
+            writer.write({"batch": f"{batch.batch_id}", "file": str(f)})
 
     def prepare_imports(self):
         admin_set_str = f"_{self.admin_set}".replace(" ", "_") if self.admin_set else ""
