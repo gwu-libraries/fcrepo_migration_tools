@@ -1,8 +1,9 @@
 import logging
-from collections import defaultdict
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from csv import DictWriter
 from datetime import datetime
+from hashlib import md5, sha256
 from io import StringIO
 from pathlib import Path
 from shutil import copy2
@@ -13,6 +14,27 @@ from zipfile import ZipFile
 from pytools.queue import StaggeredQueue
 
 logger = logging.getLogger(__name__)
+
+
+def to_camel_case(snake_str):
+    return "".join(x.capitalize() for x in snake_str.lower().split("_"))
+
+
+def to_ocfl(key: str) -> str:
+    """Per Fedora docs, creates OCFL identifer from the Fedora resource ID
+    :param key: the URI part after the base or root URI, e.g., localhost:8080/fcrepo/rest/"""
+    digest = sha256(f"info:fedora/{key}".encode("utf-8")).hexdigest()
+    return f"{digest[0:3]}/{digest[3:6]}/{digest[6:9]}/{digest}"
+
+
+def etag_checksum(filename, chunk_size=8 * 1024 * 1024):
+    """Compute MD5 checksum for a file based on chunks (as calculated by AWS S3 on upload)"""
+    md5s = []
+    with open(filename, "rb") as f:
+        for data in iter(lambda: f.read(chunk_size), b""):
+            md5s.append(md5(data).digest())
+    m = md5(b"".join(md5s))
+    return "{}-{}".format(m.hexdigest(), len(md5s))
 
 
 def uri_to_id(uri: str | List[str]):
@@ -31,6 +53,36 @@ def is_active_embargo(record) -> bool:
         datetime.fromisoformat(record["embargo_release_date"]).replace(tzinfo=None)
         >= datetime.now()
     )
+
+
+class Fedora6Exception(Exception):
+    pass
+
+
+class DiffLog:
+    skipped_fields = [
+        "id",
+        "admin_set_id",
+        "date_uploaded",
+        "date_modified",
+        "depositor",
+        "bulkrax_identifier",
+    ]
+
+    def __init__(self):
+        self.log = []
+
+    def log_errors(self, error: str, **options):
+        """options should include paraams key and model"""
+        entry = {"error": error}
+        entry.update(options)
+        self.log.append(entry)
+
+    def summarize_log(self):
+        summary = Counter()
+        for entry in self.log:
+            summary[(entry["error"], entry.get("key"), entry.get("model"))] += 1
+        return summary
 
 
 class BatchResult:
