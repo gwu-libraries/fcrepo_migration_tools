@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 import subprocess
 from datetime import datetime as dt
 from pathlib import Path
@@ -6,13 +8,15 @@ from typing import List
 
 import click
 import requests
-from pyoxigraph import NamedNode, RdfFormat, parse, serialize
+from pyoxigraph import NamedNode, RdfFormat, Store, parse, serialize
 from pythonjsonlogger.json import JsonFormatter
 from requests import HTTPError
 from yaml import Loader, load
 
 from pytools.fcrepo_to_bulkrax import FedoraGraph
 from pytools.graph_part import GraphPart
+from pytools.s3_ocfl import S3OcflRepo
+from pytools.verify_migration import Fedora6Graph, MigrationDiff
 
 logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
@@ -141,6 +145,63 @@ def extract_to_bulkrax(config, admin_set, dry_run):
         logger.addHandler(handler)
     graph = FedoraGraph(**options)
     graph.prepare_imports()
+
+
+@main.command()
+@click.option(
+    "--inventory",
+    required=True,
+    help="S3 key to inventory for OCFL repo",
+)
+@click.option(
+    "--config",
+    default="./fcrepo_to_bulkrax.yml",
+    help="Path to config file (YAML) containing options for fcrepo_to_bulkrax tool.",
+)
+def verify_migration(config):
+    with open(config) as f:
+        options = load(f, Loader=Loader)
+    v_config = options["verification"]
+    logging.info("Retrieving metadata definitions for Hyrax 5 repository.")
+    metadata_dir = Fedora6Graph.retrieve_metadata_maps(v_config["metadata_map"])
+    h5_repo = Fedora6Graph(metadata_dir)
+    logging.info(
+        "Retrieving OCFL inventory and metadata to reconstruct Hyrax 5 RDF graph."
+    )
+    s3_ocfl = S3OcflRepo(
+        region=v_config["region"],
+        bucket=v_config["bucket"],
+        path_to_ocfl=v_config["path_to_ocfl"],
+    )
+    s3_ocfl.prepare_repo(v_config["s3_inventory_key"], v_config["download_path"])
+    h5_store = Store(s3_ocfl.path_to_graph)
+    logging.info("Constructing Hyrax 3 graph")
+    h3_repo = FedoraGraph(
+        **options["migration"],
+    )
+    logging.info("Preparing diff between Hyrax 3 and Hyrax 5 graphs")
+    m_diff = MigrationDiff(
+        f4_repo=h3_repo,
+        f6_repo=h5_repo,
+        f6_store=h5_store,
+        out_path=options["migration"]["output_path"],
+    )
+    m_diff.diff_works().diff_file_sets().check_derivatives().compare_checksums(
+        h5_checksums=s3_ocfl.checksums,
+        originals=s3_ocfl.originals,
+        path_to_ocfl_root=v_config["path_to_ocfl"],
+        path_to_zips=v_config["path_to_zips"],
+    )
+    report_name = (
+        Path(options["migration"]["output_path"])
+        / f"migration-diff-log-{dt.now().strftime('%Y-%m-%d-%H-%M')}.json"
+    )
+    logging.info(f"Saving report as {report_name}.")
+    with open(
+        report_name,
+        "w",
+    ) as f:
+        json.dump(m_diff.diff_log.log, f)
 
 
 if __name__ == "__main__":

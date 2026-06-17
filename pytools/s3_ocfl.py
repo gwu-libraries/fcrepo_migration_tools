@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -9,13 +10,15 @@ from pyoxigraph import Store
 
 from pytools.graph_part import GraphPart
 
+logger = logging.getLogger(__name__)
+
 
 class S3OcflRepo:
     """Utilities for retrieving content from an S3 bucket acting as Fedora's OCFL store."""
 
     def __init__(
         self,
-        credentials: Credentials,
+        # credentials: Credentials,
         region,
         bucket,
         path_to_ocfl: str,
@@ -27,7 +30,7 @@ class S3OcflRepo:
         path_to_ocfl: to root of repo in s3 bucket, e.g., fedora-ocfl-hyrax-5/data/ocfl-root
         graph: path to pyoxigraph.Store instance (if not provided, one will be created)
         """
-        self.credentials = credentials
+        # self.credentials = credentials
         self.bucket = bucket
         self.path_to_ocfl = path_to_ocfl
         self.region = region
@@ -45,11 +48,12 @@ class S3OcflRepo:
         4) If an instance of a pyoxigraph.Store does not yet exist, downloads all .nt objects (not binaries) and populates one locally
         """
         self.download_path = Path(download_path)
+        logger.info("Downloading inventory from S3")
         inventory_path = self.loop.run_until_complete(
             self.download_inventory(inventory_key, download_path)
         )
         self.filter_inventory(inventory_path)
-
+        logger.info("Fetching checksums for binary files")
         self.checksums = self.loop.run_until_complete(
             self.get_object_checksums(self.originals.rows(named=True))
         )
@@ -58,6 +62,8 @@ class S3OcflRepo:
         ]
         # TO DO: log errors
         if not self.path_to_graph:
+            logger.info("Downloading .nt files from OCFL repo")
+            (self.download_path / "rdf").mkdir(exist_ok=True)
             downloaded_objects = self.loop.run_until_complete(
                 self.download_nt_objects(
                     self.rdf_df.rows(named=True), self.download_path / "rdf"
@@ -66,6 +72,7 @@ class S3OcflRepo:
             self.download_errors = [
                 obj for obj in downloaded_objects if isinstance(obj, Exception)
             ]
+            logger.info("Creating RDF store from .nt files")
             g = GraphPart(
                 dirs=[self.download_path / "rdf"],
                 store=str(self.download_path / "hyrax-5-migrated"),
@@ -80,8 +87,8 @@ class S3OcflRepo:
         async with session.create_client(
             "s3",
             region_name=self.region,
-            aws_secret_access_key=self.credentials.secret_key,
-            aws_access_key_id=self.credentials.access_key,
+            #  aws_secret_access_key=self.credentials.secret_key,
+            #  aws_access_key_id=self.credentials.access_key,
         ) as client:
             target = Path(download_path) / Path(inventory_key).name
             await self.fetch_object(client, inventory_key, target)
@@ -113,8 +120,8 @@ class S3OcflRepo:
         async with session.create_client(
             "s3",
             region_name=self.region,
-            aws_secret_access_key=self.credentials.secret_key,
-            aws_access_key_id=self.credentials.access_key,
+            #   aws_secret_access_key=self.credentials.secret_key,
+            #  aws_access_key_id=self.credentials.access_key,
         ) as client:
             tasks = asyncio.gather(
                 *[
@@ -136,8 +143,8 @@ class S3OcflRepo:
         async with session.create_client(
             "s3",
             region_name=self.region,
-            aws_secret_access_key=self.credentials.secret_key,
-            aws_access_key_id=self.credentials.access_key,
+            #  aws_secret_access_key=self.credentials.secret_key,
+            #   aws_access_key_id=self.credentials.access_key,
         ) as client:
             tasks = asyncio.gather(
                 *[

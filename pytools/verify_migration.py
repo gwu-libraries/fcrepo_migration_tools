@@ -36,10 +36,10 @@ This script performs an object-level comparison between a Hyrax 3/Fedora 4 repos
 # TO DO: Refactor to use the FileSet.label attribute, rather than the title, since the former should include its original identifier (need to test on re-import)
 
 
-class Fedora6Repo:
+class Fedora6Graph:
     """Object to represent a Hyrax 5/Fedora 6 repository"""
 
-    def __init__(self, path_to_metadata: str):
+    def __init__(self, path_to_metadata: str | Path):
         """:param path_to_metadata: directory containing YAML metadata definitions for a Hyrax 5 repository."""
         self.path_to_metadata = Path(path_to_metadata)
         self.metadata = self.load_metadata_maps()
@@ -53,11 +53,11 @@ class Fedora6Repo:
             metadata_map = yaml.load(f, Loader=yaml.CLoader)
         root_dir = path_to_yaml.parents[0]
         for label, uris in metadata_map.items():
-            logger.info(f"Retrieving metadata map for {label}.")
             dest_path = root_dir / label
             dest_path.mkdir(exist_ok=True)
             for uri in uris.values():
                 urlretrieve(uri, dest_path / f"{uri.split('/')[-1]}")
+        return root_dir
 
     def load_metadata_maps(self, custom_models=True):
         """Populates metadata definitions (mapping RDF predicates to Hyrax object attributes) from those provided by the Hyrax repo and (optionally) custom repository code. Expects Hyrax standard definitions and custom definitions to reside in separate directories within the directory given as self.path_to_metadata."""
@@ -147,17 +147,17 @@ class Fedora6Repo:
 
     @property
     def works_query(self):
-        return Fedora6Repo.construct_object_query(self.models, self.model_predicate)
+        return Fedora6Graph.construct_object_query(self.models, self.model_predicate)
 
     @property
     def file_sets_query(self):
-        return Fedora6Repo.construct_object_query(
+        return Fedora6Graph.construct_object_query(
             ["Hyrax::FileSet"], self.model_predicate
         )
 
     @property
     def admin_sets_query(self):
-        return Fedora6Repo.construct_object_query(
+        return Fedora6Graph.construct_object_query(
             ["Hyrax::AdministrativeSet"], self.model_predicate
         )
 
@@ -336,14 +336,14 @@ class Fedora6Repo:
                 resource["visibility"] = "authenticated"
         return list(lookup.values())
 
-    def retrieve_derivatives(self, file_sets: List[Dict[str, List[str]]], graph: Store):
+    def retrieve_derivatives(self, file_sets: List[Dict[str, List[str]]], store: Store):
         """Retrieves metadata for each file resource associated with a FileSet resource"""
         for file_set in file_sets:
             files_metadata = {}
             for file_id in file_set["file_ids"]:
                 result = {
                     quad.predicate.value: quad.object.value
-                    for quad in graph.quads_for_pattern(NamedNode(file_id), None, None)
+                    for quad in store.quads_for_pattern(NamedNode(file_id), None, None)
                 }
                 if (
                     result["http://vocabulary.samvera.org/ns#pcdmUse"]
@@ -367,24 +367,24 @@ class Fedora6Repo:
             file_set.update(files_metadata)
         return file_sets
 
-    def populate_graph(self, graph: Store):
+    def populate_graph(self, store: Store):
         """Given an instance of a pyoxigraph.Store (RDF graph) generated from Hyrax 5/Fedora 6 triples, creates a representation of the repository: works, filesets, collections, admin sets, their relationships, as well as embargoes and ACLs.
         TO DO: add collections, admin sets"""
-        works = self.process_query(graph.query(self.works_query), "work_internals")
+        works = self.process_query(store.query(self.works_query), "work_internals")
         file_sets = self.process_query(
-            graph.query(self.file_sets_query), "fileset_internals"
+            store.query(self.file_sets_query), "fileset_internals"
         )
-        links = graph.query(self.links_query)
+        links = store.query(self.links_query)
         self.works, self.file_sets = self.link_works_to_filesets(
             works, file_sets, links
         )
-        embargoes = list(graph.query(self.embargo_query))
+        embargoes = list(store.query(self.embargo_query))
         self.works = self.add_embargoes(self.works, embargoes)
         self.file_sets = self.add_embargoes(self.file_sets, embargoes)
-        permissions = list(graph.query(self.acl_query))
+        permissions = list(store.query(self.acl_query))
         self.works = self.add_acls(self.works, permissions)
         self.file_sets = self.add_acls(self.file_sets, permissions)
-        self.file_sets = self.retrieve_derivatives(self.file_sets, graph)
+        self.file_sets = self.retrieve_derivatives(self.file_sets, store)
 
 
 class MigrationDiff:
@@ -393,15 +393,15 @@ class MigrationDiff:
     def __init__(
         self,
         f4_repo: FedoraGraph,
-        f6_repo: Fedora6Repo,
-        f6_graph: Store,
+        f6_repo: Fedora6Graph,
+        f6_store: Store,
         out_path: Path | str,
     ):
         self.f4_repo = f4_repo
         self.f6_repo = f6_repo
         self.out_path = Path(out_path)
 
-        self.f6_repo.populate_graph(f6_graph)
+        self.f6_repo.populate_graph(f6_store)
 
         self.f4_works = [
             self.f4_repo.embargos.update_resource(
@@ -502,6 +502,7 @@ class MigrationDiff:
                         migrated_value=work[field],
                         model=model,
                     )
+        return self
 
     def diff_file_sets(self):
         """Computes differences between original and migrated file sets"""
@@ -537,6 +538,7 @@ class MigrationDiff:
                         original_value=element,
                         model="FileSet",
                     )
+        return self
 
     def check_derivatives(self):
         """Runs a check of migrated file sets' derivatives"""
@@ -551,14 +553,16 @@ class MigrationDiff:
                 or ("http://pcdm.org/use#ExtractedText" in derivs)
             ),
             "Unexpected Number of Derivatives Found": lambda fs, derivs: (
-                not (fs.get("mime_type") == "application/pdf") or (len(derivs) != 2)
+                not (fs.get("mime_type") == "application/pdf") or (len(derivs) == 2)
             ),
             "Missing Thumbnail": lambda _, derivs: (
                 "http://pcdm.org/use#ThumbnailImage" in derivs
             ),
         }
         for file_set in self.f6_repo.file_sets:
+            migrated_id = file_set["id"][0]
             try:
+                bulkrax_identifier = file_set["bulkrax_identifier"][0]
                 for assertion, test in assertions_1.items():
                     try:
                         assert test(file_set), assertion
@@ -566,7 +570,8 @@ class MigrationDiff:
                         self.diff_log.log_errors(
                             str(e),
                             model="FileSet",
-                            migrated_id=file_set["id"][0],
+                            migrated_id=migrated_id,
+                            bulkrax_id=bulkrax_identifier,
                             mime_type=file_set.get("mime_type"),
                             num_derivs=0,
                         )
@@ -578,12 +583,18 @@ class MigrationDiff:
                         self.diff_log.log_errors(
                             str(e),
                             model="FileSet",
-                            migrated_id=file_set["id"][0],
+                            migrated_id=migrated_id,
+                            bulkrax_id=bulkrax_identifier,
                             mime_type=file_set.get("mime_type"),
                             num_derivs=Counter(file_set["derivatives"]),
                         )
             except AssertionError:
                 continue
+            except IndexError:
+                self.diff_log.log_errors(
+                    "FileSet Missing Bulkrax Identifier", migrated_id=migrated_id
+                )
+        return self
 
     def compare_checksums(
         self,
@@ -650,6 +661,7 @@ class MigrationDiff:
                     self.diff_log.log_errors(
                         str(e),
                         model="OriginalFile",
+                        migrated_id=checksum["id"],
                         zip_file=str(zip_file),
                         file_set=checksum["file"],
                         parent=checksum["parent"],
@@ -706,6 +718,7 @@ class MigrationDiff:
                                 ).stdout
                             file["h5_checksum"] = value
                             file["original_checksum"] = checksum
+                            file["id"] = fs["id"][0]
                             checksums.append(file)
                         Path(path_to_file).unlink()
             yield (str(zip_file), checksums)

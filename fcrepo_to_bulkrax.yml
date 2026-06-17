@@ -11,3 +11,10 @@ migration:
   field_defaults:
     creator: "The George Washington University"
 verfication:
+  metadata_map: ./metadata/hyrax-5-metadata-map.yml
+  bucket: "scrc-digcol2"
+  region: "us-east-1"
+  path_to_ocfl: "fedora-ocfl-hyrax-5/data/ocfl-root"
+  download_path: /data/hyrax-5
+  s3_inventory_key: ""
+  path_to_zips: /data/bulkrax-imports
