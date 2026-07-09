@@ -27,24 +27,32 @@ class ChangeSet:
         """Expects a path to a CSV, which should contain an "id" column as well as other columns corresponding to those used in a Bulrax import. For every identifier provided, the following substitutions are allowed:
         - a non-null value: the value will be substituted for the value associated with that column when outputting the Bulkrax csv
         - the name of another Bulkrax column, surrounded by underscores (e.g., _creator_): the value from this column will be substituted for the value of the current column
-        - a delete flag, __DELETE__ (note the double underscores): the value in the current column will be replaced by a null value"""
+        - a delete flag, __DELETE__ (note the double underscores): the value in the current column will be replaced by a null value."""
         with open(change_set_path) as f:
             reader = DictReader(f)
             self.change_set = {r["id"]: r for r in reader}
 
     def apply_changes(self, resource: Resource) -> Resource:
         if changes := self.change_set.get(uri_to_id(resource.id)):
+            deletes = []
             for field, value in changes.items():
                 if not value:
                     continue
                 if not (value.startswith("_") and value.endswith("_")):
                     resource.update(field, value)
-                elif value == "__DELETE__":
-                    resource.update(field, None)
+                elif (
+                    value == "__DELETE__"
+                ):  # Stage deletes for after all substitutions have been made
+                    deletes.append(field)
                 else:
                     sub_field = value[1:-1]  # removing underscores
                     sub_value = resource.data.get(sub_field)
-                    resource.update(field, sub_value)
+                    if sub_value:
+                        resource.update(
+                            field, sub_value
+                        )  # fail safe: don't overwrite with null data
+            for field in deletes:
+                resource.update(field, None)
 
         return resource
 
