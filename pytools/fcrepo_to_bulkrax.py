@@ -24,20 +24,28 @@ class ChangeSet:
     """For updating specific fields during migration."""
 
     def __init__(self, change_set_path: str):
-        """Expects a path to a CSV, which should contain an "id" column as well as other columns corresponding to those used in a Bulrax import. For every identifier provided, any non-null values in the row will be substituted for the values associated with that column when outputting the Bulkrax csv."""
+        """Expects a path to a CSV, which should contain an "id" column as well as other columns corresponding to those used in a Bulrax import. For every identifier provided, the following substitutions are allowed:
+        - a non-null value: the value will be substituted for the value associated with that column when outputting the Bulkrax csv
+        - the name of another Bulkrax column, surrounded by underscores (e.g., _creator_): the value from this column will be substituted for the value of the current column
+        - a delete flag, __DELETE__ (note the double underscores): the value in the current column will be replaced by a null value"""
         with open(change_set_path) as f:
             reader = DictReader(f)
             self.change_set = {r["id"]: r for r in reader}
-            for _id, row in self.change_set.items():
-                for k, v in row.items():
-                    if not v:
-                        # Remove any keys corresponding to null values
-                        del self.change_set[_id][k]
 
-    def apply_changes(self, resource: Resource | FileSet) -> Resource | FileSet:
+    def apply_changes(self, resource: Resource) -> Resource:
         if changes := self.change_set.get(uri_to_id(resource.id)):
             for field, value in changes.items():
-                resource.update(field, value)
+                if not value:
+                    continue
+                if not (value.startswith("_") and value.endswith("_")):
+                    resource.update(field, value)
+                elif value == "__DELETE__":
+                    resource.update(field, None)
+                else:
+                    sub_field = value[1:-1]  # removing underscores
+                    sub_value = resource.data.get(sub_field)
+                    resource.update(field, sub_value)
+
         return resource
 
 

@@ -59,7 +59,7 @@ def output_path(tmp_path_factory):
 @pytest.fixture(scope="session")
 def change_set_path(tmp_path_factory):
     path_to_change_set = Path(tmp_path_factory.mktemp("change_set")) / "change_set.csv"
-    csv_data = """id,creator\nj6731377h,The George Washington University\nv979v304g,The George Washington University"""
+    csv_data = """id,creator,contributor,keyword\nj6731377h,The George Washington University,,\nv979v304g,The George Washington University,,\n02870v844,,_creator_,__DELETE__"""
     with open(path_to_change_set, "w") as f:
         f.write(csv_data)
     return path_to_change_set
@@ -581,10 +581,13 @@ def test_ordering(works, filesets, collections):
     assert work.id == fileset.parents
 
 
-def test_change_set(graph):
+def test_change_set(works, graph):
     for collection in graph.get_resources(Collection):
         graph.change_set.apply_changes(collection)
         assert collection.data["creator"]
+    graph.change_set.apply_changes(works[0])
+    assert works[0].data["creator"] == works[0].data["contributor"]
+    assert not works[0].data["keyword"]
 
 
 def test_bulkrax_rows_order(graph):
