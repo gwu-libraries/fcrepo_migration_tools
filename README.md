@@ -30,9 +30,9 @@ It's recommended that the following process, as well as the subsequent upgrade s
 
 2. Download the Fedora export utility: `wget https://github.com/fcrepo-exts/fcrepo-import-export/releases/download/fcrepo-import-export-0.3.0/fcrepo-import-export-0.3.0.jar`
 
-3. If a `/data` directory does not exist at root, create it.
+3. If a `/data/migration` directory does not exist at root, create it.
 
-4. Create `fedora-4.7.5-export` directory under `/data` to hold the exported objects..
+4. Create `fedora-4.7.5-export` directory under `/data/migration` to hold the exported objects..
 
 5. Run the first export. This will export the `/rest/prod` object and all its descendants to `/data/migration/fedora-4.7.5-export`: `bash ./migrate.sh export`.
    - The logs from the export utility can be found at `./export_4_[timestamp].log`.
