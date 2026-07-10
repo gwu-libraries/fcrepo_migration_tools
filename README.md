@@ -26,7 +26,7 @@ It's recommended that the following process, as well as the subsequent upgrade s
 
 2. Download the Fedora export utility: `wget https://github.com/fcrepo-exts/fcrepo-import-export/releases/download/fcrepo-import-export-0.3.0/fcrepo-import-export-0.3.0.jar`
 
-3. If a `/data` directory does not exist at root, create it.
+3. If a `/data/migration` directory does not exist at root, create it.
 
 4. Create `fedora-4.7.5-export` directory under `/data` to hold the exported objects..
 
