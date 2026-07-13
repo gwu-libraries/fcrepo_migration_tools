@@ -18,7 +18,7 @@ On the server where the Fedora 4 container is running, clone this repo:
 
 Build the image:
 
-`docker buildx build -t Dockerfile-pytools -t fcrepo_pytools .
+`docker buildx build -t Dockerfile-pytools -t fcrepo_pytools .`
 
 #### Stage 1: Export the Fedora 4 repository
 
