@@ -39,7 +39,7 @@ It's recommended that the following process, as well as the subsequent upgrade s
 
 Because we want to exclude objects outside of `/rest/prod` from the migration (including a very large number of objects nested under `/rest/audit`), we need to export the `/rest` object separately and then remove links to any children other than `/rest/prod`. (The upgrade utility needs `rest.ttl` to be present at the top level of the exported objects.)
 
-6. Run `bash ./bash ./migrate.sh export_rest`
+6. Run `bash ./migrate.sh export_rest`
 
 7. Run the following script, providing the path to the exported `rest.ttl` file from step 6: `docker run --rm -v /data/fedora-4.7.5-export:/data fcrepo_pytools remove-audits --ttl /data/rest.ttl `
   - If you `cat` the `rest.ttl` file in the `/data/fedora-4.7.5-export` directory, you should see only one `ldp:contains` line: `ldp:contains <http://localhost:8984/rest/prod> ;`
