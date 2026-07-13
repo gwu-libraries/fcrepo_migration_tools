@@ -41,7 +41,7 @@ Because we want to exclude objects outside of `/rest/prod` from the migration (i
 
 6. Run `bash ./migrate.sh export_rest`
 
-7. Run the following script, providing the path to the exported `rest.ttl` file from step 6: `docker run --rm -v /data/fedora-4.7.5-export:/data fcrepo_pytools remove-audits --ttl /data/rest.ttl `
+7. Run the following script, providing the path to the exported `rest.ttl` file from step 6: `docker run --rm -v /data/migration/fedora-4.7.5-export:/data fcrepo_pytools remove-audits --ttl /data/rest.ttl `
   - If you `cat` the `rest.ttl` file in the `/data/fedora-4.7.5-export` directory, you should see only one `ldp:contains` line: `ldp:contains <http://localhost:8984/rest/prod> ;`
 
 8. At this point, you can stop the running Fedora 4 service. The rest of the migration prep uses the exported `.ttl` files.
