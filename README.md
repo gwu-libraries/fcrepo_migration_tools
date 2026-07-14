@@ -49,8 +49,8 @@ Because we want to exclude objects outside of `/rest/prod` from the migration (i
 9. Prepare a directory on `/data` to hold the files prepared for import. (This may be a shared mount to an NFS volume, etc.) In what follows, it is assumed that this directory is called `/data/migration/bulkrax-imports`.
 
 10. Prepare the RDF graph from the exported files. This step will walk all subdirectories under the export Fedora repository root, loading `.ttl` files into an RDF database (using [Pyoxigraph](https://pyoxigraph.readthedocs.io/en/stable/).
-    - Make a directory on `/data` to hold the graph data, e.g., `mkdir /data/gwss-rdf`.
-    - Run the Dockrized Python script: `docker run --rm -v /data:/data fcrepo_pytools parse-graph --root /data/fedora-4.7.5-export --output /data/gwss-rdf`
+    - Make a directory on `/data` to hold the graph data, e.g., `mkdir /data/migration/gwss-rdf`.
+    - Run the Dockrized Python script: `docker run --rm -v /data/migration:/data fcrepo_pytools parse-graph --root /data/fedora-4.7.5-export --output /data/gwss-rdf`
 
 11. Update mappings and prepare the change set and config files:
     - `fedora_bulkrax_mapping.csv`: Maps Hyrax predicates to Bulkrax columns. May require customization depending on the exact version of Hyrax you are migrating from and the configuration of the metadata in your local repository.
