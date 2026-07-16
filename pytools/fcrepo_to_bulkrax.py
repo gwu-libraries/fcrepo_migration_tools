@@ -192,6 +192,7 @@ class FedoraGraph:
           """
         else:
             admin_set_values, admin_set_criteria = "", ""
+        models_str = " ".join([f'"{model}"' for model in self.models])
         fileset_query = """
           prefix fedora: <info:fedora/fedora-system:def/model#>
           PREFIX fedora_repo: <http://fedora.info/definitions/v4/repository#>
@@ -203,6 +204,8 @@ class FedoraGraph:
           select distinct (?s as ?work) (?fs as ?fileset) (?fn as ?filename) (?fu as ?file_uri)
           where {{
                 {admin_set_values}
+                values ?model {{ {models} }}
+                ?s fedora:hasModel ?model
                 ?s pcdm:hasMember ?fs.
                 ?fs ns:type ?fm.
                 ?fs fedora:downloadFilename ?fn.
@@ -213,7 +216,9 @@ class FedoraGraph:
             }}
             order by ?s
       """.format(
-            admin_set_values=admin_set_values, admin_set_criteria=admin_set_criteria
+            admin_set_values=admin_set_values,
+            admin_set_criteria=admin_set_criteria,
+            models=models_str,
         )
         # group by parent work ID for batching
         for k, g in groupby(
