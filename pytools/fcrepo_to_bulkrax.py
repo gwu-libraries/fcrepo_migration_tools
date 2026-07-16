@@ -84,12 +84,14 @@ class FedoraGraph:
             logger.error(f"Unable to load graph data from {path_to_graph}.", e)
             raise
         self.admin_set = admin_set
+        output_path = Path(output_path)
         if admin_set:
-            output_path = Path(output_path) / admin_set.replace(" ", "_").lower()
+            output_path = output_path / admin_set.replace(" ", "_").lower()
+        output_path.mkdir(exist_ok=True)
         self.batch_handler = BatchHandler(
             batch_size,
             self.format_for_bulkrax,
-            Path(output_path),
+            output_path,
             path_to_root,
             dry_run,
         )
