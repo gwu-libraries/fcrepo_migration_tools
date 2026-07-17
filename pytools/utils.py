@@ -212,7 +212,14 @@ class BatchHandler:
             else:
                 try:
                     out = copy2(file_path, pd / fs.file)
-                    output.append(out)
+                    output.append(
+                        {
+                            "filset_id": fs.id,
+                            "path_to_binary": str(file_path),
+                            "file_name": fs.file,
+                            "destination": str(out),
+                        }
+                    )
                 except Exception as e:
                     error_msg = (
                         f"Unable to copy file {str(file_path)} to {str(pd / fs.file)}"
