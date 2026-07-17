@@ -103,9 +103,9 @@ class BatchResult:
         return output.getvalue()
 
     def cleanup_files(self, path_to_batch):
-        for file in self.files_copied:
-            if Path(file).exists():
-                Path(file).unlink()
+        for file_dict in self.files_copied:
+            if Path(file_dict["destination"]).exists():
+                Path(file_dict["destination"]).unlink()
         if (path_to_batch / "files").exists():
             (path_to_batch / "files").rmdir()
         path_to_batch.rmdir()
@@ -120,8 +120,8 @@ class BatchResult:
             with ZipFile(zipfile_path, "w") as f:
                 f.mkdir("files")
                 f.writestr(f"{path_to_batch.name}.csv", data=self.make_csv())
-                for file in self.files_copied:
-                    file = Path(file)
+                for file_dict in self.files_copied:
+                    file = Path(file_dict["destination"])
                     f.write(file, arcname=f"files/{file.name}")
             self.cleanup_files(path_to_batch)
 
