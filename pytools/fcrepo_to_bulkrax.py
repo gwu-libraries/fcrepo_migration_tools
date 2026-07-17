@@ -190,7 +190,7 @@ class FedoraGraph:
             admin_set_criteria = """
           ?s partOf: ?a.
           ?a fedora:hasModel ?adminSetModel.
-          ?a title: ?adminSet
+          ?a title: ?adminSet.
           """
         else:
             admin_set_values, admin_set_criteria = "", ""
@@ -207,7 +207,7 @@ class FedoraGraph:
           where {{
                 {admin_set_values}
                 values ?model {{ {models} }}
-                ?s fedora:hasModel ?model
+                ?s fedora:hasModel ?model.
                 ?s pcdm:hasMember ?fs.
                 ?fs ns:type ?fm.
                 ?fs fedora:downloadFilename ?fn.
